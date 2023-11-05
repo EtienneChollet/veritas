@@ -14,7 +14,7 @@ from vesselseg.vesselseg import networks, losses, train
 from vesselseg.vesselseg.synth import SynthVesselDataset
 from veritas.utils import PathTools, JsonTools, Checkpoint
 # Eti's superstition
-torch.no_grad()
+#torch.no_grad()
 
 class Unet(object):
     """
@@ -52,7 +52,7 @@ class Unet(object):
             3, 1, 1, 3, activation=None, backbone='UNet',
             kwargs_backbone=self.backbone_dict
             )
-        torch.compile(self.segnet)
+        #torch.compile(self.segnet)
         
         trainee = train.SupervisedTrainee(
             network=self.segnet,
@@ -119,9 +119,9 @@ class Unet(object):
         self.trainee = self.load(backbone_dict)
     
 
-    def train_it(self, data_experiment_number, augmentation=None, train_to_val:float=0.8, batch_size:int=1,
+    def train_it(self, data_experiment_number, train_to_val:float=0.8, batch_size:int=1,
                  epochs=1000, loader_device='cuda', check_val_every_n_epoch:int=5,
-                 accumulate_gradient_n_batches:int=5, subset=-1):
+                 accumulate_gradient_n_batches:int=5, subset=-1, n_workers=0):
         """
         Train unet after defining or loading model.
         
@@ -145,7 +145,7 @@ class Unet(object):
             Number of batches to compute before stepping optimizer.
         """
         self.epochs = epochs
-        self.augmentation = augmentation
+        #self.augmentation = augmentation
         self.check_val_every_n_epoch = check_val_every_n_epoch
         self.accumulate_gradient_n_batches = accumulate_gradient_n_batches
         self.gpus=int(torch.cuda.device_count())
@@ -154,12 +154,14 @@ class Unet(object):
         val_split = 1 - train_split
         seed = torch.Generator().manual_seed(42)
         label_paths = glob(f'output/synthetic_data/exp{data_experiment_number:04d}/*label*')
-        dataset = SynthVesselDataset(label_paths, device=loader_device, transform=self.augmentation, subset=slice(subset))
+
+        from veritas.synth import SynthVesselDatasetv2 as sd
+        dataset = sd(label_paths, device=loader_device, subset=slice(subset))
         train_set, val_set = random_split(dataset, [train_split, val_split], seed)
 
         # Instance variables start
-        self.train_loader = DataLoader(train_set, batch_size, shuffle=True)
-        self.val_loader = DataLoader(val_set, 1, shuffle=False)
+        self.train_loader = DataLoader(train_set, batch_size, shuffle=True, num_workers=n_workers)
+        self.val_loader = DataLoader(val_set, 1, shuffle=False, num_workers=n_workers)
         self.logger = TensorBoardLogger(self.output_path, 'models', self.version_n)
         self.checkpoint_callback = ModelCheckpoint(
             monitor="val_metric_dice", mode="min", every_n_epochs=5,
@@ -177,6 +179,8 @@ class Unet(object):
         Train on single GPU.
         """
         print('Training on 1 gpu.')
+        #import torch
+        torch.multiprocessing.set_start_method('spawn')
         trainer_ = Trainer(
             accelerator=self.device,
             check_val_every_n_epoch=self.check_val_every_n_epoch,
@@ -184,7 +188,7 @@ class Unet(object):
             devices=1,
             logger=self.logger,
             callbacks=[self.checkpoint_callback],
-            max_epochs=self.epochs
+            max_epochs=self.epochs,
             )
         trainer_.fit(self.trainee, self.train_loader, self.val_loader)
 
@@ -193,6 +197,7 @@ class Unet(object):
         Train on multiple GPU devices.
         """
         print(f"Training on {self.gpus} gpus in cluster.")
+        mp.set_start_method('spawn', force=True)
         trainer_ = Trainer(
             accelerator=self.device,
             accumulate_grad_batches=self.accumulate_gradient_n_batches,
@@ -204,7 +209,6 @@ class Unet(object):
             logger=self.logger,
             max_epochs=self.epochs
         )
-        mp.set_start_method('spawn', force=True)
         n_processes = self.gpus
         self.segnet.share_memory()
         processes = []

@@ -1,7 +1,7 @@
 {
     "parenchyma": {
-        "nb_classes": 8,
-        "shape": 5
+        "nb_classes": 10,
+        "shape": 10
     },
     "gamma": [0.5, 2],
     "z_decay": [32],

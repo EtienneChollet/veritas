@@ -1,0 +1,97 @@
+--------------------------------------------------------------------------------
+  Environment Summary
+--------------------------------------------------------------------------------
+PyTorch 2.0.0.post303 DEBUG compiled w/ CUDA 11.2
+Running with Python 3.10 and 
+
+`pip3 list` truncated output:
+numpy==1.26.0
+pytorch-lightning==2.1.0
+torch==2.0.0.post303
+torch-distmap==0.1.0
+torch-interpol==0.2.4
+torchaudio==2.0.0
+torchmetrics==1.2.0
+torchvision==0.15.2a0+dd47d21
+--------------------------------------------------------------------------------
+  cProfile output
+--------------------------------------------------------------------------------
+         3483364 function calls (3389524 primitive calls) in 73.081 seconds
+
+   Ordered by: internal time
+   List reduced from 9146 to 15 due to restriction <15>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       98   19.010    0.194   19.011    0.194 /autofs/cluster/octdata2/users/epc28/miniconda/envs/veritas/lib/python3.10/site-packages/interpol/pushpull.py:35(grid_pull)
+        2   12.534    6.267   12.534    6.267 {method 'write' of '_io.BufferedWriter' objects}
+      909    7.826    0.009    7.826    0.009 {method 'masked_fill_' of 'torch._C._TensorBase' objects}
+        5    7.348    1.470    7.348    1.470 {method 'run_backward' of 'torch._C._EngineBase' objects}
+      108    6.230    0.058    6.230    0.058 {built-in method torch.as_tensor}
+     9226    1.794    0.000    1.794    0.000 {built-in method posix.stat}
+     1440    1.777    0.001    1.777    0.001 {built-in method io.open_code}
+     1602    1.557    0.001    1.559    0.001 {method '__exit__' of '_io._IOBase' objects}
+      170    1.551    0.009    1.551    0.009 {built-in method torch.conv3d}
+      476    1.416    0.003    1.416    0.003 {method 'to' of 'torch._C._TensorBase' objects}
+     1148    1.292    0.001    1.292    0.001 {built-in method posix.listdir}
+        5    1.202    0.240    1.202    0.240 {built-in method torch._unique2}
+        1    0.935    0.935    1.613    1.613 /autofs/cluster/octdata2/users/epc28/miniconda/envs/veritas/lib/python3.10/site-packages/torch/serialization.py:592(_save)
+        5    0.740    0.148    9.900    1.980 /autofs/cluster/octdata2/users/epc28/veritas/veritas/synth.py:217(vessels_)
+        3    0.710    0.237    0.710    0.237 {built-in method torch._C._cuda_emptyCache}
+
+
+--------------------------------------------------------------------------------
+  autograd profiler output (CPU mode)
+--------------------------------------------------------------------------------
+        top 15 events sorted by cpu_time_total
+
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+enumerate(DataLoader)#_SingleProcessDataLoaderIter._...         2.01%     182.118ms        82.86%        7.491s        7.491s             1  
+enumerate(DataLoader)#_SingleProcessDataLoaderIter._...         1.97%     177.941ms        81.47%        7.366s        7.366s             1  
+enumerate(DataLoader)#_SingleProcessDataLoaderIter._...         1.97%     177.752ms        79.99%        7.232s        7.232s             1  
+enumerate(DataLoader)#_SingleProcessDataLoaderIter._...         1.98%     179.118ms        58.33%        5.274s        5.274s             1  
+enumerate(DataLoader)#_SingleProcessDataLoaderIter._...         1.80%     163.189ms        56.21%        5.082s        5.082s             1  
+                               Optimizer.step#Adam.step        16.12%        1.458s        25.59%        2.314s        2.314s             1  
+                               Optimizer.step#Adam.step        16.43%        1.486s        24.35%        2.202s        2.202s             1  
+                               Optimizer.step#Adam.step        16.32%        1.476s        24.13%        2.181s        2.181s             1  
+                               Optimizer.step#Adam.step        16.23%        1.467s        24.05%        2.175s        2.175s             1  
+                               Optimizer.step#Adam.step        16.64%        1.504s        23.75%        2.147s        2.147s             1  
+autograd::engine::evaluate_function: ConvolutionBack...         0.00%      23.000us         8.52%     769.999ms     769.999ms             1  
+                                   ConvolutionBackward0         0.00%       5.000us         8.52%     769.976ms     769.976ms             1  
+                             aten::convolution_backward         8.52%     769.913ms         8.52%     769.971ms     769.971ms             1  
+autograd::engine::evaluate_function: ConvolutionBack...         0.00%      25.000us         8.49%     767.843ms     767.843ms             1  
+                                   ConvolutionBackward0         0.00%       6.000us         8.49%     767.818ms     767.818ms             1  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 9.041s
+
+--------------------------------------------------------------------------------
+  autograd profiler output (CUDA mode)
+--------------------------------------------------------------------------------
+        top 15 events sorted by cpu_time_total
+
+        Because the autograd profiler uses the CUDA event API,
+        the CUDA time column reports approximately max(cuda_time, cpu_time).
+        Please ignore this output if your code does not use CUDA.
+
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+enumerate(DataLoader)#_SingleProcessDataLoaderIter._...         2.05%     188.301ms        83.72%        7.696s        7.696s     160.789ms         1.60%        7.701s        7.701s             1  
+enumerate(DataLoader)#_SingleProcessDataLoaderIter._...         2.04%     187.201ms        83.30%        7.658s        7.658s     160.907ms         1.60%        7.666s        7.666s             1  
+enumerate(DataLoader)#_SingleProcessDataLoaderIter._...         2.06%     189.690ms        82.66%        7.599s        7.599s     158.685ms         1.58%        7.610s        7.610s             1  
+enumerate(DataLoader)#_SingleProcessDataLoaderIter._...         2.04%     187.861ms        59.04%        5.427s        5.427s     159.526ms         1.58%        5.429s        5.429s             1  
+enumerate(DataLoader)#_SingleProcessDataLoaderIter._...         1.87%     172.233ms        57.88%        5.321s        5.321s     144.067ms         1.43%        5.323s        5.323s             1  
+                               Optimizer.step#Adam.step        16.26%        1.495s        26.67%        2.451s        2.451s        1.729s        17.16%        2.452s        2.452s             1  
+                               Optimizer.step#Adam.step        16.20%        1.490s        26.61%        2.447s        2.447s        1.724s        17.12%        2.438s        2.438s             1  
+                               Optimizer.step#Adam.step        16.23%        1.492s        26.60%        2.445s        2.445s        1.728s        17.16%        2.446s        2.446s             1  
+                               Optimizer.step#Adam.step        16.71%        1.536s        26.37%        2.424s        2.424s        1.768s        17.56%        2.424s        2.424s             1  
+                               Optimizer.step#Adam.step        17.03%        1.565s        25.48%        2.343s        2.343s        1.721s        17.09%        2.339s        2.339s             1  
+autograd::engine::evaluate_function: ConvolutionBack...         0.00%      31.000us         7.50%     689.704ms     689.704ms       4.000us         0.00%     621.059ms     621.059ms             1  
+                                   ConvolutionBackward0         0.00%      11.000us         7.50%     689.673ms     689.673ms       3.000us         0.00%     621.055ms     621.055ms             1  
+                             aten::convolution_backward         7.50%     689.591ms         7.50%     689.662ms     689.662ms     618.024ms         6.14%     621.052ms     621.052ms             1  
+autograd::engine::evaluate_function: ConvolutionBack...         0.00%      47.000us         7.46%     685.405ms     685.405ms       4.000us         0.00%     616.237ms     616.237ms             1  
+                                   ConvolutionBackward0         0.00%      11.000us         7.46%     685.358ms     685.358ms       3.000us         0.00%     616.233ms     616.233ms             1  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 9.193s
+Self CUDA time total: 10.073s

@@ -13,7 +13,7 @@ import torch
 import shutil
 import numpy as np
 import math as pymath
-from torchmetrics.functional import dice
+#from torchmetrics.functional import dice
 
 class Options(object):
     """
@@ -27,7 +27,6 @@ class Options(object):
         """
         Determine out filename. Same dir as volume.
         """
-        #stem = ''
         stem = f"{self.attribute_dict['volume_name']}-prediction"
         stem += f"_stepsz-{self.attribute_dict['step_size']}"
         try:
