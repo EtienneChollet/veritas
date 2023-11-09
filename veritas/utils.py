@@ -206,33 +206,43 @@ def thresholding(
         return prediction_tensor, None, None
 
 
-def volume_stats(tensor, n:int=150, stats:bool=True, zero=False, unique=False, a:int=None, b:int=None, step:float=None):    
+def volume_info(tensor, name=None, n:int=150, stats:bool=True, zero=False, unique=False, a:int=None, b:int=None, step:float=None):    
+    
     if stats:
-        print("\nShape:", tensor.shape)
-        print("dtype:", tensor.dtype)
-        print("\nVolume Statistics:",'#' * 20)
-        print("Mean:", round(tensor.mean().item(), 3))
-        print("Median:", round(tensor.median().item(), 3))
-        print("StDev:", round(tensor.std().item(), 3))
-        print(f"Range: [{round(tensor.min().item(), 3)}, {round(tensor.max().item(), 3)}]")
+        if name is not None:
+            print('\n')
+            print('#' * 20,f'\n{name} Info')
+            print('#' * 20)
+        print("\nGeneral Volume Info:")
+        print('-' * 20)
+        print("  Requres grad:", tensor.requires_grad)
+        print("  Shape:", list(tensor.shape))
+        print("  dtype:", tensor.dtype)
+        
+        print("\nVolume Statistics:")
+        print('-' * 20)
+        print(f"  Mean: {tensor.mean().item():.1e}")
+        print(f"  Median: {tensor.median().item():.1e}")
+        print(f"  StDev: {tensor.std().item():.1e}")
+        print(f"  Range: [{tensor.min().item():.1e}, {tensor.max().item():.1e}]")
         # Quantiles
-        print("2nd Percentile:", round(torch.quantile(tensor, 0.02).item(), 3))
-        print("25th Percentile:", round(torch.quantile(tensor, 0.25).item(), 3))
-        print("75th Percentile:", round(torch.quantile(tensor, 0.75).item(), 3))
-        print("98th Percentile:", round(torch.quantile(tensor, 0.98).item(), 3))
+        #print("2nd Percentile:", round(torch.quantile(tensor, 0.02).item(), 3))
+        #print("25th Percentile:", round(torch.quantile(tensor, 0.25).item(), 3))
+        #print("75th Percentile:", round(torch.quantile(tensor, 0.75).item(), 3))
+        #print("98th Percentile:", round(torch.quantile(tensor, 0.98).item(), 3))
 
-    img = tensor.to('cpu').numpy().squeeze()
-    if a is None:
-        a = pymath.floor(img.min())
-    if b is None:
-        b = pymath.ceil(img.max()) + 2
-    if step is None:
-        step = 1
+    #img = tensor.to('cpu').numpy().squeeze()
+    #if a is None:
+    #    a = pymath.floor(img.min())
+    #if b is None:
+    #    b = pymath.ceil(img.max()) + 2
+    #if step is None:
+    #    step = 1
 
-    if unique:
-        print(np.unique(img))
-    else:
-        pass
+    #if unique:
+    #    print(np.unique(img))
+    #else:
+    #    pass
 
     # Histogram
     #frequency, intensity = np.histogram(img, bins=np.arange(a, b, step))

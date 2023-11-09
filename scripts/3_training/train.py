@@ -20,12 +20,12 @@ if __name__ == "__main__":
     #torch.set_float32_matmul_precision('medium')
 
     # New unet
-    #unet = Unet(version_n=1)
-    #unet.new(nb_levels=2, nb_features=[8, 8])
+    unet = Unet(version_n=1)
+    unet.new(nb_levels=6, nb_features=[32, 64, 128, 256, 512, 1024])
     
     # Load unet (retraining)
-    unet = Unet(version_n=2)
-    unet.load(type='last')
+    #unet = Unet(version_n=1)
+    #unet.load(type='last')
 
     unet.train_it(
         data_experiment_number=1,

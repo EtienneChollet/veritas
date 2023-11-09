@@ -49,7 +49,7 @@ class VesselSynth(object):
         """
         # All JIT things need to be handled here. Do not put them outside this class.
         os.environ['PYTORCH_JIT_USE_NNC_NOT_NVFUSER'] = '1'
-        os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+        #os.environ['CUDA_VISIBLE_DEVICES'] = '0'
         #import interpol
         #interpol.backend.jitfields=True
         backend.jitfields = True
@@ -133,150 +133,6 @@ class VesselSynth(object):
         file.close()
 
 
-class OctVolSynth(nn.Module):
-    """
-    Synthesize OCT-like volumes from vascular network.
-    """
-    def __init__(self, dtype=torch.float32, device:str='cuda'):
-        super().__init__()
-        """
-        Parameters
-        ----------
-        dtype : torch.dtype
-            Type of data that will be used in synthesis.
-        device : {'cuda', 'cpu'}
-            Device that will be used for syntesis.
-        
-        """
-        self.dtype = dtype
-        self.device = device
-        self.json_dict = JsonTools('scripts/2_imagesynth/imagesynth_params.json').read()
-        self.noise_a = float(self.json_dict['noise'][0])
-        self.noise_b = float(self.json_dict['noise'][1])
-        self.thickness_ = int(self.json_dict['z_decay'][0])
-        self.nb_classes_ = int(self.json_dict['parenchyma']['nb_classes'])
-        self.shape_ = int(self.json_dict['parenchyma']['shape'])
-    
-    def forward(self, vessel_labels_tensor:torch.Tensor) -> tuple:
-        """
-        Parameters
-        ----------
-        vessel_labels_tensor : tensor
-            Tensor of vessels with unique ID integer labels
-        """
-        vessel_labels_tensor = vessel_labels_tensor.to(self.device)
-        # synthesize the main parenchyma (background tissue)
-        parenchyma = self.parenchyma_(vessel_labels_tensor)
-        # synthesize vessels (grouped by intensity)
-        vessels = self.vessels_(vessel_labels_tensor)
-        # Create another parenchyma-like mask to texturize vessels 
-        #vessel_texture = self.vessel_texture_(vessel_labels_tensor)
-        # Texturize vessels!!
-        #vessels = torch.mul(vessels, vessel_texture)
-        #vessels = vessels * vessel_texture
-        # Converting label IDs to tensor (we don't need unique IDs anymore,
-        # only a binary mask)
-        vessel_labels_tensor = vessel_labels_tensor.to(torch.bool)
-        # Since it was impossible to get good results with zeros
-        vessels[vessels == 0] = 1
-        # "stamping" the vessel scaling factor onto the parenchyma volume
-        final_volume = torch.mul(parenchyma, vessels)
-        return final_volume, vessel_labels_tensor
-        
-
-    def parenchyma_(self, vessel_labels_tensor:torch.Tensor):
-        """
-        Parameters
-        ----------
-        vessel_labels_tensor : tensor[int]
-            Tensor of vessels with unique ID integer labels
-        nb_classes : int
-            Number of unique parenchymal "blobs"
-        shape : int
-            Number of spline control points
-        """
-        # Create the label map of parenchyma but convert to float32 for further computations
-        # Add 1 so that we can work with every single pixel (no zeros)
-        parenchyma = RandomSmoothLabelMap(
-            nb_classes=random.randint(2, self.nb_classes_),
-            shape=random.randint(2, self.shape_)
-            )(vessel_labels_tensor).to(self.dtype) + 1
-        # Applying speckle noise model
-        parenchyma = RandomGammaNoiseTransform(
-            sigma=Uniform(self.noise_a, self.noise_b)
-            )(parenchyma).to(self.dtype)[0]
-        # Applying z-stitch artifact
-        parenchyma = RandomSlicewiseMulFieldTransform(
-            thickness=self.thickness_
-            )(parenchyma)
-        return parenchyma
-    
-
-    def vessels_(self, vessel_labels_tensor:torch.Tensor, n_groups:int=10,
-             min_i:float=0.01, max_i:float=0.90):
-        """
-        Parameters
-        ----------
-        vessel_labels_tensor : tensor[int]
-            Tensor of vessels with unique ID integer labels
-        n_groups : int
-            Number of vessel groups differentiated by intensity
-        min_i : float
-            Minimum intensity of vessels compared to background
-        max_i : float
-            Maximum intensity of vessels compared to background
-        """
-        # Need to put this guy on CPU before mask fill operation.
-        # Generate an empty tensor that we will fill with vessels and their
-        # scaling factors to imprint or "stamp" onto parenchymal volume
-        scaling_tensor = torch.zeros(vessel_labels_tensor.shape).to(self.device)
-        # Get sorted list of all vessel labels
-        vessel_labels = list(sorted(vessel_labels_tensor.unique().tolist()))[1:]
-        # Generate the number of unique intensities
-        nb_unique_intensities = RandInt(1, n_groups)()
-        # Calculate the number of elements (vessels) in each intensity group
-        nb_vessels_per_intensity = int(pymath.ceil(len(vessel_labels)
-                                                / nb_unique_intensities))
-        # Iterate through each vessel group based on their unique intensity
-        for int_n in range(nb_unique_intensities):
-            # Assign intensity for this group from uniform distro
-            intensity = Uniform(min_i, max_i)()
-            # Get label ID's of all vessels that will be assigned to this intensity
-            vessel_labels_at_i = vessel_labels[int_n * nb_vessels_per_intensity:
-                                            (int_n + 1) * nb_vessels_per_intensity]
-            # Fill the empty tensor with the vessel scaling factors
-            for ves_n in vessel_labels_at_i:
-                scaling_tensor.masked_fill_(vessel_labels_tensor == ves_n, intensity)
-        return scaling_tensor
-    
-
-    def vessel_texture_(self, vessel_labels_tensor:torch.Tensor, nb_classes:int=4,
-                shape:int=5):
-        """
-        Parameters
-        ----------
-        vessel_labels_tensor : tensor[int]
-            Tensor of vessels with unique ID integer labels
-        nb_classes : int
-            Number of unique parenchymal "blobs"
-        shape : int
-            Number of spline control points
-        """
-        # Create the label map of parenchyma but convert to float32 for further computations
-        # Add 1 so that we can work with every single pixel (no zeros)
-        parenchyma = RandomSmoothLabelMap(
-            nb_classes=Fixed(self.nb_classes_),
-            shape=self.shape_
-            )(vessel_labels_tensor).to(self.dtype) + 1
-        # Applying speckle noise model
-        parenchyma = RandomGammaNoiseTransform(
-            sigma=Uniform(self.noise_a, self.noise_b)
-            )(parenchyma).to(self.dtype)[0]
-        # Applying z-stitch artifact
-        parenchyma = RandomSlicewiseMulFieldTransform(
-            thickness=self.thickness_
-            )(parenchyma)
-        return parenchyma
 
 
 class OctVolSynthDataset(Dataset):
@@ -327,7 +183,8 @@ class OctVolSynthDataset(Dataset):
         nifti = nib.load(self.label_paths[idx])
         volume_affine = nifti.affine
         # Loading and processing volume tensor
-        volume_tensor = torch.from_numpy(nifti.get_fdata()).to(self.device)
+        volume_tensor = torch.from_numpy(nifti.get_fdata())
+        volume_tensor = volume_tensor.type_as(device=self.device)
         # Reshaping
         volume_tensor = volume_tensor.squeeze()[None, None]
         # Synthesizing volume
@@ -385,7 +242,7 @@ class OctVolSynthDataset(Dataset):
 class SynthVesselDatasetv2(Dataset):
     ### FROM YAEL
 
-    def __init__(self, inputs, transform=None, subset=None, device='cpu'):
+    def __init__(self, inputs, transform=None, subset=None, device='cuda'):
         """
         Parameters
         ----------
@@ -402,7 +259,151 @@ class SynthVesselDatasetv2(Dataset):
         return len(self.inputs)
 
     def __getitem__(self, idx):
-        label = torch.from_numpy(nib.load(self.inputs[idx]).get_fdata()[None]).to(torch.uint8)
-        #label = label.to(self.device)
+        label = torch.from_numpy(nib.load(self.inputs[idx]).get_fdata()[None])
+        label = label.to('cuda').to(torch.uint8)
         label = self.transform(label)
         return label
+    
+
+class OctVolSynth(nn.Module):
+    """
+    Synthesize OCT-like volumes from vascular network.
+    """
+    def __init__(self, dtype=torch.float32, device:str='cuda'):
+        super().__init__()
+        """
+        Parameters
+        ----------
+        dtype : torch.dtype
+            Type of data that will be used in synthesis.
+        device : {'cuda', 'cpu'}
+            Device that will be used for syntesis.
+        
+        """
+        self.dtype = dtype
+        self.device = device
+        self.json_dict = JsonTools('scripts/2_imagesynth/imagesynth_params.json').read()
+        self.noise_a = float(self.json_dict['noise'][0])
+        self.noise_b = float(self.json_dict['noise'][1])
+        self.thickness_ = int(self.json_dict['z_decay'][0])
+        self.nb_classes_ = int(self.json_dict['parenchyma']['nb_classes'])
+        self.shape_ = int(self.json_dict['parenchyma']['shape'])
+    
+    def forward(self, vessel_labels_tensor:torch.Tensor) -> tuple:
+        """
+        Parameters
+        ----------
+        vessel_labels_tensor : tensor
+            Tensor of vessels with unique ID integer labels
+        """
+        # Get sorted list of all vessel labels for later
+        self.vessel_labels = list(sorted(vessel_labels_tensor.unique().tolist()))[1:]
+        # Generate the number of unique intensities
+        self.nb_unique_intensities = RandInt(1, 10)()
+        # synthesize the main parenchyma (background tissue)
+        parenchyma = self.parenchyma_(vessel_labels_tensor)
+        # synthesize vessels (grouped by intensity)
+        vessels = self.vessels_(vessel_labels_tensor)
+        # Create another parenchyma-like mask to texturize vessels 
+        #vessel_texture = self.vessel_texture_(vessel_labels_tensor)
+        # Texturize vessels!!
+        #vessels = torch.mul(vessels, vessel_texture)
+        #vessels = vessels * vessel_texture
+        # Converting label IDs to tensor (we don't need unique IDs anymore,
+        # only a binary mask)
+        # Since it was impossible to get good results with zeros
+        vessels[vessels == 0] = 1
+        # "stamping" the vessel scaling factor onto the parenchyma volume
+        final_volume = torch.mul(parenchyma, vessels)
+        return final_volume, vessel_labels_tensor
+        
+
+    def parenchyma_(self, vessel_labels_tensor:torch.Tensor):
+        """
+        Parameters
+        ----------
+        vessel_labels_tensor : tensor[int]
+            Tensor of vessels with unique ID integer labels
+        nb_classes : int
+            Number of unique parenchymal "blobs"
+        shape : int
+            Number of spline control points
+        """
+        # Create the label map of parenchyma but convert to float32 for further computations
+        # Add 1 so that we can work with every single pixel (no zeros)
+        parenchyma = RandomSmoothLabelMap(
+            nb_classes=random.randint(2, self.nb_classes_),
+            shape=random.randint(2, self.shape_)
+            )(vessel_labels_tensor).to(self.dtype) + 1
+        # Applying speckle noise model
+        parenchyma = RandomGammaNoiseTransform(
+            sigma=Uniform(self.noise_a, self.noise_b)
+            )(parenchyma).to(self.dtype)[0]
+        # Applying z-stitch artifact
+        parenchyma = RandomSlicewiseMulFieldTransform(
+            thickness=self.thickness_
+            )(parenchyma)
+        return parenchyma
+    
+
+    def vessels_(self, vessel_labels_tensor:torch.Tensor, n_groups:int=10,
+             min_i:float=0.01, max_i:float=0.90):
+        """
+        Parameters
+        ----------
+        vessel_labels_tensor : tensor[int]
+            Tensor of vessels with unique ID integer labels
+        n_groups : int
+            Number of vessel groups differentiated by intensity
+        min_i : float
+            Minimum intensity of vessels compared to background
+        max_i : float
+            Maximum intensity of vessels compared to background
+        """
+        # Need to put this guy on CPU before mask fill operation.
+        # Generate an empty tensor that we will fill with vessels and their
+        # scaling factors to imprint or "stamp" onto parenchymal volume
+        scaling_tensor = torch.zeros(vessel_labels_tensor.shape, dtype=torch.float32, device=self.device)
+        # Calculate the number of elements (vessels) in each intensity group
+        nb_vessels_per_intensity = int(pymath.ceil(len(self.vessel_labels)
+                                                / self.nb_unique_intensities))
+        # Iterate through each vessel group based on their unique intensity
+        for int_n in range(self.nb_unique_intensities):
+            # Assign intensity for this group from uniform distro
+            intensity = Uniform(min_i, max_i)()
+            # Get label ID's of all vessels that will be assigned to this intensity
+            vessel_labels_at_i = self.vessel_labels[int_n * nb_vessels_per_intensity:
+                                            (int_n + 1) * nb_vessels_per_intensity]
+            # Fill the empty tensor with the vessel scaling factors
+            for ves_n in vessel_labels_at_i:
+                scaling_tensor.masked_fill_(vessel_labels_tensor == ves_n, intensity)    
+        return scaling_tensor
+    
+
+    def vessel_texture_(self, vessel_labels_tensor:torch.Tensor, nb_classes:int=4,
+                shape:int=5):
+        """
+        Parameters
+        ----------
+        vessel_labels_tensor : tensor[int]
+            Tensor of vessels with unique ID integer labels
+        nb_classes : int
+            Number of unique parenchymal "blobs"
+        shape : int
+            Number of spline control points
+        """
+        # Create the label map of parenchyma but convert to float32 for further computations
+        # Add 1 so that we can work with every single pixel (no zeros)
+        parenchyma = RandomSmoothLabelMap(
+            nb_classes=Fixed(self.nb_classes_),
+            shape=self.shape_
+            )(vessel_labels_tensor).to(self.dtype) + 1
+        # Applying speckle noise model
+        parenchyma = RandomGammaNoiseTransform(
+            sigma=Uniform(self.noise_a, self.noise_b)
+            )(parenchyma).to(self.dtype)[0]
+        # Applying z-stitch artifact
+        parenchyma = RandomSlicewiseMulFieldTransform(
+            thickness=self.thickness_
+            )(parenchyma)
+        return parenchyma

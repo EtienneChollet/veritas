@@ -175,3 +175,12 @@ veritas/__pycache__/synth.cpython-310.pyc.22903979724784
 veritas/__pycache__/utils.cpython-310.pyc
 logs/train.log
 logs/vesselsynth.log
+logs/test.log
+logs/test.log
+logs/train.log
+logs/train.log
+veritas/utils.py
+veritas/__pycache__/data.cpython-310.pyc
+veritas/__pycache__/models.cpython-310.pyc
+veritas/__pycache__/synth.cpython-310.pyc
+veritas/__pycache__/utils.cpython-310.pyc
