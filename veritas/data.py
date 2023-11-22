@@ -8,7 +8,10 @@ import os
 import sys
 import time
 import torch
+import random
+import numpy as np
 import nibabel as nib
+from veritas.utils import PathTools
 from torch.utils.data import Dataset
 
 # Custom imports
@@ -19,7 +22,7 @@ class RealOct(object):
     Base class for real OCT volumetric data.
     """
     def __init__(self,
-                 input:torch.Tensor | str,
+                 input:torch.Tensor=None | str,
                  device:str='cuda',
                  dtype:torch.dtype=torch.float32,
                  patch_size:int=256,
@@ -82,6 +85,7 @@ class RealOct(object):
         self.binarize=binarize
         self.padding_method=padding_method
         self.load_volume()
+        self.shape = self.tensor.shape
         self.affine = self.nifti.affine
         self.verbose = verbose
         if kill_nifti == True:
@@ -127,6 +131,7 @@ class RealOct(object):
         self.tensor /= self.tensor.max()
         #volume_info(self.tensor, 'Normalized')
 
+
     def binarize_volume(self):
         if isinstance(self.binarize, float):
             self.tensor[self.tensor >= self.binarize] = 1
@@ -147,7 +152,7 @@ class RealOct(object):
             pad=padding,
             mode='replicate'
         )[0]
-        self.padded_shape = self.tensor.shape
+        self.shape = self.tensor.shape
         #volume_info(self.tensor, 'Padded')
 
 
@@ -175,13 +180,98 @@ class RealOctPatchLoader(RealOct, Dataset):
     
     def patch_coords(self):
         self.complete_patch_coords = []
-        x_coords = [[x, x+self.patch_size] for x in range(0, self.padded_shape[0] - self.step_size + 1, self.step_size)]
-        y_coords = [[y, y+self.patch_size] for y in range(0, self.padded_shape[1] - self.step_size + 1, self.step_size)]
-        z_coords = [[z, z+self.patch_size] for z in range(0, self.padded_shape[2] - self.step_size + 1, self.step_size)]
+        x_coords = [[x, x+self.patch_size] for x in range(0, self.shape[0] - self.step_size + 1, self.step_size)]
+        y_coords = [[y, y+self.patch_size] for y in range(0, self.shape[1] - self.step_size + 1, self.step_size)]
+        z_coords = [[z, z+self.patch_size] for z in range(0, self.shape[2] - self.step_size + 1, self.step_size)]
         for x in x_coords:
             for y in y_coords:
                 for z in z_coords:
                     self.complete_patch_coords.append([x, y, z])
+
+
+    def random_patch_sampler(self,
+                             n_patches:int=10,
+                             out_dir:str=None,
+                             name_prefix:str='patch',
+                             seed:int=None,
+                             threshold:float=None):
+        """
+        Extract random patches from parent volume and save as nii.
+
+        Parameters
+        ----------
+        n_patches : int
+            Number of patches to extract and save.
+        out_dir : str
+            Directory to save patches to. Defaults to directory of volume.
+        name_prefix : str {'patch', 'prediction'}
+            Prefix for naming patches in patch directory. 
+        seed : int
+            Random seed for selecting patch ID's. If none, optimal seed will be found.
+        threshold : float
+            Minimum mean value that all patches must have if seed is None. 
+        """
+
+        if out_dir is None:
+            out_dir = self.input.split('/')[:-1]
+            out_dir.append('patches')
+            out_dir = '/'.join(out_dir)
+
+        PathTools(out_dir).makeDir()
+
+        if seed is None:
+            print('Finding first best seed according to threshold')
+            if threshold is None:
+                print('You need to define a threshold to find the best seed :)')
+                exit(0)
+            threshold = float(threshold)
+            keep_going = True
+            seed = 0
+            while keep_going:
+                patch_means = []
+                torch.random.manual_seed(seed)
+                random_patch_indicies = torch.randint(len(self), [n_patches]).tolist()
+                
+                for i in range(len(random_patch_indicies)):
+                    patch, coords = self[random_patch_indicies[i]]
+                    patch_means.append(patch.mean().item())
+                    
+                least = min(patch_means)
+                if least < threshold:
+                    keep_going = True
+                    seed += 1
+                    sys.stdout.write(f"\rTrying seed {seed}")
+                    sys.stdout.flush()
+                if least >= threshold:
+                    keep_going = False
+                    print(f'\nGot it! seed {seed} is good!!!')
+                    print(least)
+                    break
+        elif isinstance(seed, int):
+            print(f'Using user defined seed (seed {seed})')
+            torch.random.manual_seed(seed)
+            random_patch_indicies = torch.randint(len(self), [n_patches]).tolist()
+        else:
+            print('What do I do with that seed! Gimme an int!')
+
+        for i in range(len(random_patch_indicies)):
+            patch, coords = self[random_patch_indicies[i]]
+            coords = [coords[0].start, coords[1].start, coords[2].start]
+
+            aff = np.copy(self.affine)
+            M = aff[:3, :3]
+            abc = aff[:3, 3]
+            abc += np.diag(M * coords)
+
+            #patch_affine = np.copy(self.affine)
+            #patch_affine[0][3] += (coords[0].start * 0.02)
+            #patch_affine[1][3] += (coords[1].start * 0.02)
+            #patch_affine[2][3] += (coords[2].start * 0.02)
+
+            patch = nib.nifti1.Nifti1Image(patch.cpu().numpy(), affine=aff)
+            nib.save(patch, f'{out_dir}/{name_prefix}_{i}.nii')
+        print(f'Saved patches to {out_dir}')
+        return seed
 
 
 class RealOctPredict(RealOctPatchLoader, Dataset):
@@ -191,7 +281,7 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
         with torch.no_grad():
             self.trainee = trainee
             self.imprint_tensor = torch.zeros(
-                self.padded_shape, device=self.device, dtype=self.dtype
+                self.shape, device=self.device, dtype=self.dtype
                 ).detach()
 
 
@@ -257,11 +347,8 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
         """
         self.out_dir, self.full_path = Options(self).out_filepath(dir)
         os.makedirs(self.out_dir, exist_ok=True)
-
         print(f"\nSaving prediction to {self.full_path}...")
         self.imprint_tensor = self.imprint_tensor.cpu().numpy()
-        #print(self.imprint_tensor.shape)
-        #print(self.imprint_tensor.max())
 
         out_nifti = nib.nifti1.Nifti1Image(dataobj=self.imprint_tensor, affine=self.affine)
         nib.save(out_nifti, self.full_path)
