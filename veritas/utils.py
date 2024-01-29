@@ -27,7 +27,7 @@ class Options(object):
         """
         Determine out filename. Same dir as volume.
         """
-        stem = f"{self.attribute_dict['volume_name']}-prediction"
+        stem = f"{self.attribute_dict['tensor_name']}-prediction"
         stem += f"_stepsz-{self.attribute_dict['step_size']}"
         try:
             stem += f"_{self.attribute_dict['accuracy_name']}-{self.attribute_dict['accuracy_val']}"
@@ -272,7 +272,7 @@ class PathTools(object):
         """
         Delete all files and subdirectories.
         """
-        shutil.rmtree(path=self.path)
+        shutil.rmtree(path=self.path, ignore_errors=True)
 
 
     def makeDir(self):
@@ -282,8 +282,11 @@ class PathTools(object):
         if not os.path.exists(self.path):
             os.makedirs(self.path)
         else:
-            self.destroy()
-            os.makedirs(self.path)
+            try:
+                self.destroy()
+                os.makedirs(self.path)
+            except:
+                pass
     
 
     def patternRemove(self, pattern):
@@ -331,10 +334,11 @@ class JsonTools(object):
         path : str
             Path to new json file to create.
         """
-        self.json_object = json.dumps(dict, indent=4)
-        file = open(self.path, 'x+')
-        file.write(self.json_object)
-        file.close()
+        if not os.path.exists(self.path):
+            self.json_object = json.dumps(dict, indent=4)
+            file = open(self.path, 'x')
+            file.write(self.json_object)
+            file.close()
 
     def read(self):
         f = open(self.path)

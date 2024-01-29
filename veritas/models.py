@@ -21,7 +21,7 @@ class Unet(object):
     Base class for UNet.
     """
     def __init__(
-            self, version_n:int, device='cuda'
+            self, version_n:int, model_dir:str='models', device='cuda'
         ):
         """
         Parameters
@@ -32,8 +32,9 @@ class Unet(object):
             Device to load UNet onto.
         """
         self.version_n=version_n
+        self.model_dir = model_dir
         self.output_path="output"
-        self.version_path=f"{self.output_path}/models/version_{version_n}"
+        self.version_path=f"{self.output_path}/{model_dir}/version_{version_n}"
         self.json_path=f"{self.version_path}/json_params.json"
         self.checkpoint_dir = f"{self.version_path}/checkpoints"
         self.device=device
@@ -52,12 +53,10 @@ class Unet(object):
             kwargs_backbone=self.backbone_dict
             )
         #torch.compile(self.segnet)
-        
         trainee = train.SupervisedTrainee(
             network=self.segnet,
             loss=self.losses[0],
             metrics=self.metrics,
-            #augmentation=self.augmentation
             )
 
         if backbone_dict is None:
@@ -86,8 +85,8 @@ class Unet(object):
         return trainee
 
 
-    def new(self, nb_levels=4, nb_features=[32,64,128,256], dropout=0, nb_conv=2,
-            kernel_size=3, activation='ReLU', norm='instance'):
+    def new(self, nb_levels=4, nb_features=[32,64,128,256], dropout=0.05, nb_conv=2,
+            kernel_size=3, activation='ReLU', norm='batch'):
         """
         nb_levels : int
             Number of convolutional levels for Unet.
@@ -118,12 +117,13 @@ class Unet(object):
         self.trainee = self.load(backbone_dict)
     
 
-    def train_it(self, data_experiment_number, train_to_val:float=0.8, batch_size:int=1,
-                 epochs=1000, loader_device='cuda', check_val_every_n_epoch:int=5,
-                 accumulate_gradient_n_batches:int=5, subset=-1, n_workers=0):
+    def train_it(self, data_experiment_number, train_to_val:float=0.95, batch_size:int=1,
+                 epochs=1000, loader_device='cuda', check_val_every_n_epoch:int=1,
+                 accumulate_gradient_n_batches:int=1, subset=-1, n_workers=0,
+                 texturize_vessels:bool=True, z_decay:bool=True, i_max:float=0.9):
         """
         Train unet after defining or loading model.
-        
+        Trainer
         Parameters
         ----------
         data_path : str
@@ -148,19 +148,26 @@ class Unet(object):
         self.check_val_every_n_epoch = check_val_every_n_epoch
         self.accumulate_gradient_n_batches = accumulate_gradient_n_batches
         self.gpus=int(torch.cuda.device_count())
+        self.i_max = i_max
         train_split = train_to_val
         val_split = 1 - train_split
         seed = torch.Generator().manual_seed(42)
         label_paths = glob(f'output/synthetic_data/exp{data_experiment_number:04d}/*label*')
-
+        
         from veritas.synth import SynthVesselDatasetv2 as sd
-        dataset = sd(label_paths, device=loader_device, subset=slice(subset))
+        dataset = sd(
+            inputs=label_paths,
+            texturize_vessels=texturize_vessels,
+            z_decay=z_decay,
+            device=loader_device,
+            i_max=self.i_max,
+            subset=slice(subset))
         self.train_set, self.val_set = random_split(dataset, [train_split, val_split], seed)
 
         # Instance variables start
         #self.train_loader = DataLoader(train_set, batch_size, shuffle=True, num_workers=n_workers)
         #self.val_loader = DataLoader(val_set, 1, shuffle=False, num_workers=n_workers)
-        self.logger = TensorBoardLogger(self.output_path, 'models', self.version_n)
+        self.logger = TensorBoardLogger(self.output_path, self.model_dir, self.version_n)
         self.checkpoint_callback = ModelCheckpoint(
             monitor="val_metric_dice", mode="min", every_n_epochs=5,
             save_last=True, filename='{epoch}-{val_loss:.5f}')
@@ -186,6 +193,8 @@ class Unet(object):
             logger=self.logger,
             callbacks=[self.checkpoint_callback],
             max_epochs=self.epochs,
+            gradient_clip_val=0.5,
+            gradient_clip_algorithm='value'
             )
         trainer_.fit(
             self.trainee,
@@ -208,7 +217,9 @@ class Unet(object):
             callbacks=[self.checkpoint_callback],
             logger=self.logger,
             max_epochs=self.epochs,
-            use_distributed_sampler=True
+            use_distributed_sampler=True,
+            gradient_clip_val=0.5,
+            gradient_clip_algorithm='value'
         )
         n_processes = self.gpus
         self.segnet.share_memory()

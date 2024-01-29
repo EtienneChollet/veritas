@@ -1,7 +1,6 @@
 import time
 import veritas
 import torch
-import os
 
 #os.environ['TORCH_USE_CUDA_DSA'] = '1'
 #os.environ['CUDA_LAUNCH_BLOCKING']='1'
@@ -11,30 +10,35 @@ if __name__ == "__main__":
     print(f"CUDA available: {torch.cuda.is_available()}")
     t1 = time.time()
 
-    #volume = '/cluster/micro/recon/191124_HK001_CaudalMedulla/Process_new/HK001-CaudalMedulla_20um_averaging.nii'
-    # CAA Case
-    volume = '/autofs/space/omega_001/users/caa/CAA26_Occipital/Process_caa26_occipital/mus/mus_mean_20um-iso.nii'
-    # Caroline's volume
-    #volume = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/I46_Somatosensory_20um_crop.nii'
+    volume = '/autofs/cluster/octdata2/users/epc28/data/CAA/caa25/occipital/caa25_occipital.nii'
+
     with torch.no_grad():
-        unet = veritas.Unet(version_n=8)
-        unet.load(type='best')
+        unet = veritas.Unet(
+            model_dir='models',
+            version_n=8,
+            device='cuda'
+            )
+        
+        unet.load(type='last')
 
         prediction = veritas.RealOctPredict(
             input=volume,
             trainee=unet.trainee,
             dtype=torch.float32,
-            device='cuda',
+            device='cpu',
             patch_size=256,
             step_size=64,
             normalize=True,
-            pad=True,
-            verbose=True,
+            pad_it=True,
+            padding_method='reflect',
             )
         
+        #for coord_pair in prediction.complete_patch_coords:
+        #   print(coord_pair[2])
+        #print(prediction.complete_patch_coords)
+
         prediction.predict_on_all()
         out_path = f"{unet.version_path}/predictions"
         prediction.save_prediction(dir=out_path)
-
         t2 = time.time()
         print(f"Process took {round((t2-t1)/60, 2)} min")

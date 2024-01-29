@@ -20,7 +20,7 @@ from vesselsynth.vesselsynth.io import default_affine
 from vesselsynth.vesselsynth.synth import SynthVesselOCT
 from cornucopia.cornucopia.labels import RandomSmoothLabelMap
 from cornucopia.cornucopia.noise import RandomGammaNoiseTransform
-from cornucopia.cornucopia import RandomSlicewiseMulFieldTransform
+from cornucopia.cornucopia import RandomSlicewiseMulFieldTransform, RandomGammaTransform
 from cornucopia.cornucopia.random import Uniform, Fixed, RandInt
 
 
@@ -36,9 +36,11 @@ class VesselSynth(object):
     """
     Synthesize 3D vascular network and save as nifti.
     """
-    def __init__(self, device:str='cuda',
+    def __init__(self,
+                 device:str='cuda',
                  json_param_path:str='scripts/1_vesselsynth/vesselsynth_params.json',
-                 experiment_number=1):
+                 experiment_number=1
+                 ):
         """
         Parameters
         ----------
@@ -58,10 +60,11 @@ class VesselSynth(object):
         self.json_params = json.load(open(json_param_path))   # This is the json file that should be one directory above this one. Defines all variables
         self.shape = self.json_params['shape']                           
         self.n_volumes = self.json_params['n_volumes']
+        self.begin_at_volume_n = self.json_params['begin_at_volume_n']
         self.experiment_path = f"output/synthetic_data/exp{experiment_number:04d}"
         PathTools(self.experiment_path).makeDir()
         self.header = nib.Nifti1Header()
-        self.prepOutput(f'{self.experiment_path}/vesselsynth_params.json')
+        self.prepOutput(f'{self.experiment_path}/#_vesselsynth_params.json')
         self.backend()
         self.outputShape()
 
@@ -69,8 +72,14 @@ class VesselSynth(object):
     def synth(self):
         """
         Synthesize a vascular network.
+
+        begin_at : int
+            Volume number to begin at.
         """
-        for n in range(self.n_volumes):
+        file = open(f'{self.experiment_path}/#_notes.txt', 'x')
+        file.close()
+
+        for n in range(self.begin_at_volume_n, self.begin_at_volume_n + self.n_volumes):
             print(f"Making volume {n:04d}")
             synth_names = ['prob', 'label', "level", "nb_levels",
                          "branch", "skeleton"]
@@ -133,8 +142,6 @@ class VesselSynth(object):
         file.close()
 
 
-
-
 class OctVolSynthDataset(Dataset):
     """
     Synthesize OCT intensity volume from vascular network.
@@ -142,7 +149,10 @@ class OctVolSynthDataset(Dataset):
     def __init__(self,
                  exp_path:str=None,
                  label_type:str='label',
-                 device:str="cuda"
+                 device:str="cuda",
+                 texturize_vessels:bool=True,
+                 z_decay:bool=True,
+                 i_max:float=0.9
                  ):
         """
         Parameters
@@ -159,6 +169,9 @@ class OctVolSynthDataset(Dataset):
         self.sample_nifti_dir = f"{exp_path}/sample_vols/niftis"
         PathTools(self.sample_nifti_dir).makeDir()
         PathTools(self.sample_fig_dir).makeDir()
+        self.texturize_vessels = texturize_vessels
+        self.z_decay = z_decay
+        self.i_max = i_max
 
 
     def __len__(self) -> int:
@@ -183,27 +196,32 @@ class OctVolSynthDataset(Dataset):
         nifti = nib.load(self.label_paths[idx])
         volume_affine = nifti.affine
         # Loading and processing volume tensor
-        volume_tensor = torch.from_numpy(nifti.get_fdata())
-        volume_tensor = volume_tensor.type_as(device=self.device)
+        volume_tensor = torch.from_numpy(nifti.get_fdata()).to(self.device)
         # Reshaping
         volume_tensor = volume_tensor.squeeze()[None, None]
         # Synthesizing volume
-        im, prob = OctVolSynth()(volume_tensor)
+        im, prob = OctVolSynth(
+            texturize_vessels=self.texturize_vessels,
+            z_decay=self.z_decay,
+            i_max=self.i_max
+        )(volume_tensor)
         # Converting image and prob map to numpy. Reshaping
         im = im.detach().cpu().numpy().squeeze().squeeze()
         if self.label_type == 'label':
             prob = prob.to(torch.uint8).detach().cpu().numpy().squeeze().squeeze()
+            prob[prob >= 1] = 1
+            # Should be [0, 1]
+            #print(prob.min(), prob.max())
         elif self.label_type != 'label':
             prob = nib.load(self.y_paths[idx]).get_fdata()
             prob[prob > 0] = 1
             prob[prob < 0] = 0
         else:
             pass
-        
         if save_nifti == True:
             volume_name = f"volume-{idx:04d}"
-            out_path_volume = f'{self.sample_nifti_dir}/{volume_name}.nii.gz'
-            out_path_prob = f'{self.sample_nifti_dir}/{volume_name}_MASK.nii.gz'
+            out_path_volume = f'{self.sample_nifti_dir}/{volume_name}.nii'
+            out_path_prob = f'{self.sample_nifti_dir}/{volume_name}_MASK.nii'
             print(f"Saving Nifti to: {out_path_volume}")
             nib.save(nib.Nifti1Image(im, affine=volume_affine), out_path_volume)
             nib.save(nib.Nifti1Image(prob, affine=volume_affine), out_path_prob)
@@ -241,8 +259,16 @@ class OctVolSynthDataset(Dataset):
 
 class SynthVesselDatasetv2(Dataset):
     ### FROM YAEL
-
-    def __init__(self, inputs, transform=None, subset=None, device='cuda'):
+    
+    def __init__(self,
+                 inputs,
+                 transform=None,
+                 texturize_vessels:bool=True,
+                 z_decay:bool=True,
+                 subset=None,
+                 i_max:float=0.9,
+                 device='cuda'
+                 ):
         """
         Parameters
         ----------
@@ -253,7 +279,12 @@ class SynthVesselDatasetv2(Dataset):
         """     
         self.inputs = np.asarray(inputs[subset]) # uses less RAM in multithreads
         self.device=device
-        self.transform = OctVolSynth(device=self.device)
+        self.transform = OctVolSynth(
+            device=self.device,
+            texturize_vessels=texturize_vessels,
+            z_decay=z_decay,
+            i_max=i_max
+            )
 
     def __len__(self):
         return len(self.inputs)
@@ -261,15 +292,16 @@ class SynthVesselDatasetv2(Dataset):
     def __getitem__(self, idx):
         label = torch.from_numpy(nib.load(self.inputs[idx]).get_fdata()[None])
         label = label.to('cuda').to(torch.uint8)
-        label = self.transform(label)
-        return label
+        volume, label = self.transform(label)
+        label[label >= 1] = 1
+        return (volume, label)
     
 
 class OctVolSynth(nn.Module):
     """
     Synthesize OCT-like volumes from vascular network.
     """
-    def __init__(self, dtype=torch.float32, device:str='cuda'):
+    def __init__(self, texturize_vessels:bool=True, z_decay:bool=True, dtype=torch.float32, i_max:float=0.9, device:str='cuda'):
         super().__init__()
         """
         Parameters
@@ -280,14 +312,19 @@ class OctVolSynth(nn.Module):
             Device that will be used for syntesis.
         
         """
+        self.texturize_vessels = texturize_vessels
+        self.z_decay = z_decay
         self.dtype = dtype
         self.device = device
         self.json_dict = JsonTools('scripts/2_imagesynth/imagesynth_params.json').read()
-        self.noise_a = float(self.json_dict['noise'][0])
-        self.noise_b = float(self.json_dict['noise'][1])
+        self.speckle_a = float(self.json_dict['speckle'][0])
+        self.speckle_b = float(self.json_dict['speckle'][1])
+        self.gamma_a = float(self.json_dict['gamma'][0])
+        self.gamma_b = float(self.json_dict['gamma'][1])
         self.thickness_ = int(self.json_dict['z_decay'][0])
         self.nb_classes_ = int(self.json_dict['parenchyma']['nb_classes'])
         self.shape_ = int(self.json_dict['parenchyma']['shape'])
+        self.i_max = i_max
     
     def forward(self, vessel_labels_tensor:torch.Tensor) -> tuple:
         """
@@ -299,22 +336,26 @@ class OctVolSynth(nn.Module):
         # Get sorted list of all vessel labels for later
         self.vessel_labels = list(sorted(vessel_labels_tensor.unique().tolist()))[1:]
         # Generate the number of unique intensities
-        self.nb_unique_intensities = RandInt(1, 10)()
+        self.nb_unique_intensities = random.randint(2, self.nb_classes_)
         # synthesize the main parenchyma (background tissue)
         parenchyma = self.parenchyma_(vessel_labels_tensor)
         # synthesize vessels (grouped by intensity)
         vessels = self.vessels_(vessel_labels_tensor)
-        # Create another parenchyma-like mask to texturize vessels 
-        #vessel_texture = self.vessel_texture_(vessel_labels_tensor)
-        # Texturize vessels!!
-        #vessels = torch.mul(vessels, vessel_texture)
-        #vessels = vessels * vessel_texture
-        # Converting label IDs to tensor (we don't need unique IDs anymore,
-        # only a binary mask)
-        # Since it was impossible to get good results with zeros
+        if self.texturize_vessels == True:
+            # Create another parenchyma-like mask to texturize vessels 
+            vessel_texture = self.vessel_texture_(vessel_labels_tensor)
+            # Texturize vessels!!
+            vessels = torch.mul(vessels, vessel_texture)
+            # Converting label IDs to tensor (we don't need unique IDs anymore,
+            # only a binary mask)
+        # We want the parenchyma (where we are not making changes to intensity)
+        # to remain the same, so we change zeros to ones.
         vessels[vessels == 0] = 1
         # "stamping" the vessel scaling factor onto the parenchyma volume
         final_volume = torch.mul(parenchyma, vessels)
+        # Normalizing
+        final_volume -= final_volume.min()
+        final_volume = final_volume / final_volume.max()
         return final_volume, vessel_labels_tensor
         
 
@@ -337,17 +378,21 @@ class OctVolSynth(nn.Module):
             )(vessel_labels_tensor).to(self.dtype) + 1
         # Applying speckle noise model
         parenchyma = RandomGammaNoiseTransform(
-            sigma=Uniform(self.noise_a, self.noise_b)
+            sigma=Uniform(self.speckle_a, self.speckle_b)
             )(parenchyma).to(self.dtype)[0]
         # Applying z-stitch artifact
-        parenchyma = RandomSlicewiseMulFieldTransform(
-            thickness=self.thickness_
-            )(parenchyma)
+        if self.z_decay == True:
+            parenchyma = RandomSlicewiseMulFieldTransform(
+                thickness=self.thickness_
+                )(parenchyma)
+        parenchyma = RandomGammaTransform((self.gamma_a, self.gamma_b))(parenchyma)
+        parenchyma -= parenchyma.min()
+        parenchyma /= parenchyma.max()
+        #print(parenchyma.min(), parenchyma.max())
         return parenchyma
     
 
-    def vessels_(self, vessel_labels_tensor:torch.Tensor, n_groups:int=10,
-             min_i:float=0.01, max_i:float=0.90):
+    def vessels_(self, vessel_labels_tensor:torch.Tensor, n_groups:int=10):
         """
         Parameters
         ----------
@@ -370,6 +415,8 @@ class OctVolSynth(nn.Module):
         # Iterate through each vessel group based on their unique intensity
         for int_n in range(self.nb_unique_intensities):
             # Assign intensity for this group from uniform distro
+            min_i = 0.01
+            max_i = self.i_max
             intensity = Uniform(min_i, max_i)()
             # Get label ID's of all vessels that will be assigned to this intensity
             vessel_labels_at_i = self.vessel_labels[int_n * nb_vessels_per_intensity:
@@ -394,16 +441,15 @@ class OctVolSynth(nn.Module):
         """
         # Create the label map of parenchyma but convert to float32 for further computations
         # Add 1 so that we can work with every single pixel (no zeros)
+        nb_classes = RandInt(2, self.nb_classes_)()
         parenchyma = RandomSmoothLabelMap(
-            nb_classes=Fixed(self.nb_classes_),
+            nb_classes=Fixed(nb_classes),
             shape=self.shape_
             )(vessel_labels_tensor).to(self.dtype) + 1
         # Applying speckle noise model
-        parenchyma = RandomGammaNoiseTransform(
-            sigma=Uniform(self.noise_a, self.noise_b)
-            )(parenchyma).to(self.dtype)[0]
-        # Applying z-stitch artifact
-        parenchyma = RandomSlicewiseMulFieldTransform(
-            thickness=self.thickness_
-            )(parenchyma)
+        parenchyma = RandomGammaTransform((self.gamma_a, self.gamma_b))(parenchyma)
+        parenchyma -= parenchyma.min()
+        parenchyma /= parenchyma.max()
+        parenchyma[parenchyma <= 0] = 10e-2
+        #parenchyma += 10e-2
         return parenchyma

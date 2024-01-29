@@ -1,10 +1,9 @@
 {
     "parenchyma": {
-        "nb_classes": 10,
-        "shape": 10
+        "nb_classes": 5,
+        "shape": 5
     },
-    "gamma": [0.5, 2],
+    "gamma": [0.75, 1.5],
     "z_decay": [32],
-    "noise": [0.2, 0.4]
+    "speckle": [0.6, 0.8]
 }
-
