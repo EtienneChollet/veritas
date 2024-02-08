@@ -361,7 +361,7 @@ class Checkpoint(object):
         self.checkpoint_paths = glob.glob(f"{self.checkpoint_dir}/*")
 
     def best(self):
-        return [hit for hit in self.checkpoint_paths if 'epoch' in hit][0]
+        return [hit for hit in self.checkpoint_paths if 'epoch=' in hit][0]
     
     def last(self):
-        return [hit for hit in self.checkpoint_paths if 'last' in hit][0]
+        return [hit for hit in self.checkpoint_paths if 'last.ckpt' in hit][0]

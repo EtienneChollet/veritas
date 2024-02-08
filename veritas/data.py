@@ -30,7 +30,7 @@ class RealOct(object):
                  binary_threshold:int=0.5,
                  normalize:bool=False,
                  pad_it:bool=False,
-                 padding_method:str='replicate', # change to "reflect"
+                 padding_method:str='reflect', # change to "reflect"
                  device:str='cuda',
                  dtype:torch.dtype=torch.float32,
                  patch_coords_:bool=False,
@@ -114,29 +114,34 @@ class RealOct(object):
             self.volume_dir = self.input.strip('.nii').strip(self.tensor_name).strip('/')
             nifti = nib.load(input)
             # Load tensor on device with dtype. Detach from graph.
-            tensor = torch.as_tensor(
-                nifti.get_fdata(), device=self.device, dtype=self.dtype
-                ).detach()
+            tensor = nifti.get_fdata()
+            #tensor = torch.as_tensor(
+            #    nifti.get_fdata(), device=self.device, dtype=self.dtype
+            #    ).detach()
             affine = nifti.affine
         elif isinstance(input, torch.Tensor):
             tensor = input.to(self.device).to(self.dtype).detach()
             nifti = None
             # needs identity matrix for affine
-        volume_info(tensor, 'Raw')
+        #volume_info(tensor, 'Raw')
         if normalize == True:
             tensor = self.normalize_volume(tensor)
+        # Needs to be a tensor for padding operations
+        tensor = torch.as_tensor(tensor, device=self.device, dtype=self.dtype).detach()
         if pad_it == True:
             tensor = self.pad_volume(tensor)
         if self.binarize == True:
             tensor[tensor <= self.binary_threshold] = 0
             tensor[tensor > self.binary_threshold] = 1
-        
         return tensor, nifti, affine
 
 
     def normalize_volume(self, input):
         input -= input.min()
-        input /= input.max()
+        #_min = np.percentile(input, 2)
+        #input -= _min
+        _max = np.percentile(input, 98)
+        input /= _max        
         return input
         #volume_info(self.tensor, 'Normalized')
 
@@ -152,7 +157,7 @@ class RealOct(object):
             pad=padding,
             mode=self.padding_method
         )[0]
-        volume_info(tensor, 'Padded')
+        #volume_info(tensor, 'Padded')
         return tensor
         
 
@@ -172,12 +177,8 @@ class RealOctPatchLoader(RealOct, Dataset):
         # Generating slices for easy handling
         x_slice = slice(*working_patch_coords[0])
         y_slice = slice(*working_patch_coords[1])
-        z_slice = slice(*working_patch_coords[2])
-        # Loading patch via coords and detaching from tracking
-        if tensor == None:
-            patch = self.tensor[x_slice, y_slice, z_slice].detach()
-        else:
-            tensor[x_slice, y_slice, z_slice].detach()
+        z_slice = slice(*working_patch_coords[2])        
+        patch = self.tensor[x_slice, y_slice, z_slice].detach()
         coords = [x_slice, y_slice, z_slice]
         return patch, coords
         
@@ -201,6 +202,7 @@ class RealOctPatchLoader(RealOct, Dataset):
                              name_prefix:str='patch',
                              seed:int=None,
                              threshold:float=None,
+                             save_patches:bool=True,
                              mask:{torch.Tensor, str}=None,
                              mask_id:int=1,
                              mask_threshold:float=0.5,
@@ -250,7 +252,7 @@ class RealOctPatchLoader(RealOct, Dataset):
                 # Gathering patch indicies for mean analysis
                 random_patch_indicies = torch.randint(len(self), [n_patches]).tolist()
                 for i in range(len(random_patch_indicies)):
-                    patch, coords = self[random_patch_indicies[i]](threshold_tensor)
+                    patch, coords = self[random_patch_indicies[i]]#(threshold_tensor)
                     patch_means.append(patch.mean().item())
                 least = min(patch_means)
                 if least < threshold:
@@ -264,33 +266,31 @@ class RealOctPatchLoader(RealOct, Dataset):
                     print(least)
                     print(coords)
                     break
-
         elif isinstance(seed, int):
             print(f'Using user defined seed (seed {seed})')
             torch.random.manual_seed(seed)
             random_patch_indicies = torch.randint(len(self), [n_patches]).tolist()
         else:
             print('What do I do with that seed! Gimme an int!')
+        # Saving patches
+        if save_patches == True:
+            PathTools(out_dir).makeDir()        
+            for i in range(len(random_patch_indicies)):
+                patch, coords = self[random_patch_indicies[i]]
+                coords = [coords[0].start, coords[1].start, coords[2].start]
+                coords_list.append(coords)
 
-        PathTools(out_dir).makeDir()
-        for i in range(len(random_patch_indicies)):
-            patch, coords = self[random_patch_indicies[i]]
-            coords = [coords[0].start, coords[1].start, coords[2].start]
-            coords_list.append(coords)
+                aff = np.copy(self.affine)
+                M = aff[:3, :3]
+                abc = aff[:3, 3]
+                abc += np.diag(M * coords)
 
-            aff = np.copy(self.affine)
-            M = aff[:3, :3]
-            abc = aff[:3, 3]
-            abc += np.diag(M * coords)
-
-            #patch_affine = np.copy(self.affine)
-            #patch_affine[0][3] += (coords[0].start * 0.02)
-            #patch_affine[1][3] += (coords[1].start * 0.02)
-            #patch_affine[2][3] += (coords[2].start * 0.02)
-
-            patch = nib.nifti1.Nifti1Image(patch.cpu().numpy(), affine=aff)
-            nib.save(patch, f'{out_dir}/{name_prefix}_{i}.nii')
-        print(f'Saved patches to {out_dir}')
+                patch = patch.to(self.dtype).cpu().numpy()
+                patch = nib.nifti1.Nifti1Image(patch, affine=aff)
+                nib.save(patch, f'{out_dir}/{name_prefix}_{i}.nii')
+            print(f'Saved patches to {out_dir}')
+        elif save_patches == False:
+            print("Fine, I won't save them")
 
         if output == None:
             return seed
@@ -307,6 +307,14 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
         self.imprint_tensor = torch.zeros(
             self.tensor.shape, device=self.device, dtype=self.dtype
             )
+        # Increasing "scale" will weight the ends of the patch less.
+        #scale = 1/4
+        scale = 63/64
+        min = torch.pi * scale
+        max = ((1/scale) - 1) * (torch.pi * scale)
+        self.backend = dict(dtype=self.dtype, device=self.device)
+        patch_dim_weight = torch.linspace(min, max, self.patch_size, **self.backend).sin()
+        self.patch_weight = patch_dim_weight[:, None, None] * patch_dim_weight[None, :, None] * patch_dim_weight[None, None, :]
 
     def __getitem__(self, idx:int):
         """
@@ -321,69 +329,54 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
         ## Needs to go on cuda for prediction
         prediction = self.trainee(patch.unsqueeze(0).unsqueeze(0))
         prediction = torch.sigmoid(prediction).squeeze()
-        if self.device == 'cpu':
-            prediction = prediction.to('cpu')
-
-        backend = dict(dtype=prediction.dtype, device=prediction.device)
-        #weight = torch.linspace(0, 3.14, self.patch_size, **backend).sin()
-        #weight = weight[None, None, :] * weight[None, :, None] * weight[:, None, None]
-
-        scale = 1/4
-        min = torch.pi * scale
-        max = ((1/scale) - 1) * (torch.pi * scale)
-        
-        weight_x = torch.linspace(min, max, prediction.shape[0], **backend).sin()
-        weight_y = torch.linspace(min, max, prediction.shape[1], **backend).sin()
-        weight_z = torch.linspace(min, max, prediction.shape[2], **backend).sin()
-        weight = weight_x[:, None, None] * weight_y[None, :, None] * weight_z[None, None, :]
-        self.imprint_tensor[coords[0], coords[1], coords[2]] += (prediction * weight)
-        # some issues with inconsistent sizes. Using broadcasting
-        #self.imprint_weight[coords[0], coords[1], coords[2]] += weight 
-        #self.imprint_tensor[coords[0], coords[1], coords[2]] += prediction
+        self.imprint_tensor[coords[0], coords[1], coords[2]] += (prediction * self.patch_weight)
 
     def predict_on_all(self):
         if self.tensor.dtype != torch.float32:
             self.tensor = self.tensor.to(torch.float32)
-        if self.device != 'cuda':
-            self.device == 'cuda'
-            self.tensor = self.tensor.to('cuda') 
+            print('Input tensor needs to be float32!!')
         n_patches = len(self)
         t0 = time.time()
         for i in range(n_patches):
             self[i]
-            if (i+1) % 10 == 0:
+            if (i+1) % 100 == 0:
                 total_elapsed_time = time.time() - t0
-                average_time_per_pred = round(total_elapsed_time / (i+1), 2)
+                average_time_per_pred = round(total_elapsed_time / (i+1), 3)
                 sys.stdout.write(f"\rPrediction {i + 1}/{n_patches} | {average_time_per_pred} sec/pred | {round(average_time_per_pred * n_patches / 60, 2)} min total pred time")
                 sys.stdout.flush()
 
-        # Step size, then number to divide by
-        #avg_factors = {256:1, 128:8, 64:64, 32:512, 16:4096}
-        patchsize_to_stepsize = self.patch_size // self.step_size
-        #print('\n', patchsize_to_stepsize)
-        # for patchsze=256: avg_factor(stepsize=[256,128,64,32]) = [1,8,64,512]
-        if self.patch_size == 256:
-            avg_factor = 8 ** (patchsize_to_stepsize - 1)
-        elif self.patch_size == 128:
-            avg_factor = 8 ** (patchsize_to_stepsize - 1)
-        elif self.patch_size == 64:
-            #avg_factor = 8 ** (patchsize_to_stepsize - 1)
-            factors = {1:1, 2:8, 4:64, 8:512}
-            avg_factor = factors[patchsize_to_stepsize]
-        else:
-            avg_factor = 1
+        #patchsize_to_stepsize = self.patch_size // self.step_size
+        #if self.patch_size == 256:
+        #    avg_factor = 8 ** (patchsize_to_stepsize - 1)
+        #elif self.patch_size == 128:
+        #    avg_factor = 8 ** (patchsize_to_stepsize - 1)
+        #elif self.patch_size == 64:
+        #    factors = {1:1, 2:8, 4:64, 8:512}
+        #    avg_factor = factors[patchsize_to_stepsize]
+        #else:
+        #    avg_factor = 1
 
         # Remove padding
         s = slice(self.patch_size, -self.patch_size)
         self.imprint_tensor = self.imprint_tensor[s, s, s]
-        #self.imprint_weight = self.imprint_weight[s, s, s]
-        #self.imprint_tensor *= self.imprint_weight
-
-        print(f"\n\n{avg_factor}x Averaging...")
-        self.imprint_tensor /= avg_factor
+        #print(f"\n\n{avg_factor}x Averaging...")
+        self.imprint_tensor = self.imprint_tensor.cpu().numpy()
+        self.imprint_tensor -= self.imprint_tensor.min()
+        # Normalizing to one based on 98th percentile
+        #_max = np.percentile(self.imprint_tensor, 98)
+        #self.imprint_tensor = np.clip(self.imprint_tensor, 0, _max)   
+        #self.imprint_tensor /= _max
         self.imprint_tensor /= self.imprint_tensor.max()
-        print(f"Prediction Minimum: {self.imprint_tensor.min()}")
-        print(f"Prediction Maximum: {self.imprint_tensor.max()}")
+
+        # Making binary
+        #_mid = np.percentile(self.imprint_tensor, 95)
+        #self.imprint_tensor[self.imprint_tensor <= _mid] = 0
+        #self.imprint_tensor[self.imprint_tensor > _mid] = 1
+
+        # Nibabel does not support float 16
+        #self.imprint_tensor = self.imprint_tensor.astype(np.uint8)
+        #print(f"Prediction Minimum: {self.imprint_tensor.min()}")
+        #print(f"Prediction Maximum: {self.imprint_tensor.max()}")
 
     def save_prediction(self, dir=None):
         """
@@ -397,6 +390,5 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
         self.out_dir, self.full_path = Options(self).out_filepath(dir)
         os.makedirs(self.out_dir, exist_ok=True)
         print(f"\nSaving prediction to {self.full_path}...")
-        self.imprint_tensor = self.imprint_tensor.cpu().numpy()        
         out_nifti = nib.nifti1.Nifti1Image(dataobj=self.imprint_tensor, affine=self.affine)
         nib.save(out_nifti, self.full_path)

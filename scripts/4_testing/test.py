@@ -2,30 +2,26 @@ import time
 import veritas
 import torch
 
-#os.environ['TORCH_USE_CUDA_DSA'] = '1'
-#os.environ['CUDA_LAUNCH_BLOCKING']='1'
-#os.environ['PYTORCH_CUDA_ALLOC_CONF']='garbage_collection_threshold:0.9,max_split_size_mb:512'
-
 if __name__ == "__main__":    
-    print(f"CUDA available: {torch.cuda.is_available()}")
     t1 = time.time()
-
-    volume = '/autofs/cluster/octdata2/users/epc28/data/CAA/caa25/occipital/caa25_occipital.nii'
+    volume = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/I46_Somatosensory_20um_crop.nii'
+    #volume = '/autofs/cluster/octdata2/users/epc28/data/CAA/caa26/occipital/caa26_occipital.nii'
+    #volume = '/autofs/cluster/octdata/users/cmagnain/190312_I46_SomatoSensory/I46_Somatosensory_20um_averaging_new.nii'
 
     with torch.no_grad():
         unet = veritas.Unet(
-            model_dir='models',
-            version_n=8,
+            model_dir='paper_models_context_256',
+            version_n=3,
             device='cuda'
             )
         
-        unet.load(type='last')
+        unet.load(type='last', mode='test')
 
         prediction = veritas.RealOctPredict(
             input=volume,
             trainee=unet.trainee,
             dtype=torch.float32,
-            device='cpu',
+            device='cuda',
             patch_size=256,
             step_size=64,
             normalize=True,

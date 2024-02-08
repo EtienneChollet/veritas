@@ -45,7 +45,7 @@ class Visualize(object):
                 dtype=torch.float32
                 )
             binarized_volume = prediction_tensor.tensor.cpu().numpy()
-            #binarized_volume[binarized_volume < 0.5] = 0
+            #[binarized_volume < 0.5] = 0
             #binarized_volume[binarized_volume >= 0.5] = 1
             affine = prediction_tensor.affine
             out_nifti = nib.nifti1.Nifti1Image(dataobj=binarized_volume, affine=affine)
@@ -157,8 +157,8 @@ class Confusion(object):
             binary_threshold=binary_threshold,
             device='cpu',
             dtype=torch.float32
-            ).tensor
-        volume_info(self.prediction, 'prediction')
+            ).tensor.numpy()
+        #volume_info(self.prediction, 'prediction')
         
         
     def true_positives(self):
@@ -201,10 +201,22 @@ class Confusion(object):
         print(f'FN: {out_vol.sum()}')
         return out_vol, rgb
     
+my_segmentation = '/autofs/cluster/octdata2/users/epc28/veritas/output/paper_models_ablation/version_11/predictions/I46_Somatosensory_20um_crop-prediction_stepsz-16.nii'
+james_segmentation = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/ground_truth.nii'
+
+confusion = Confusion(my_segmentation, james_segmentation, binary_threshold=0.005)
+tp = confusion.true_positives()[0].sum()
+fn = confusion.false_negatives()[0].sum()
+fp = confusion.false_positives()[0].sum()
+
+dice_score = round((2 * tp) / ((2 * tp) + fp + fn), 3)
+print(dice_score)
+
+exit(0)
 prediction = '/autofs/cluster/octdata2/users/epc28/veritas/output/models/version_8/predictions/caa17_occipital.nii.gz-prediction_stepsz-256.nii'
 Visualize(in_path=prediction).main()
 
-exit(0)
+
 binary_threshold = 0.5
 model_version = 1
 
