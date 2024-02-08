@@ -1,24 +1,21 @@
 import time
 import veritas
 import torch
-import os
-
-#os.environ['TORCH_USE_CUDA_DSA'] = '1'
-#os.environ['CUDA_LAUNCH_BLOCKING']='1'
-#os.environ['PYTORCH_CUDA_ALLOC_CONF']='garbage_collection_threshold:0.9,max_split_size_mb:512'
 
 if __name__ == "__main__":    
-    print(f"CUDA available: {torch.cuda.is_available()}")
     t1 = time.time()
+    volume = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/I46_Somatosensory_20um_crop.nii'
+    #volume = '/autofs/cluster/octdata2/users/epc28/data/CAA/caa26/occipital/caa26_occipital.nii'
+    #volume = '/autofs/cluster/octdata/users/cmagnain/190312_I46_SomatoSensory/I46_Somatosensory_20um_averaging_new.nii'
 
-    #volume = '/cluster/micro/recon/191124_HK001_CaudalMedulla/Process_new/HK001-CaudalMedulla_20um_averaging.nii'
-    # CAA Case
-    volume = '/autofs/space/omega_001/users/caa/CAA26_Occipital/Process_caa26_occipital/mus/mus_mean_20um-iso.nii'
-    # Caroline's volume
-    #volume = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/I46_Somatosensory_20um_crop.nii'
     with torch.no_grad():
-        unet = veritas.Unet(version_n=8)
-        unet.load(type='best')
+        unet = veritas.Unet(
+            model_dir='paper_models_context_256',
+            version_n=3,
+            device='cuda'
+            )
+        
+        unet.load(type='last', mode='test')
 
         prediction = veritas.RealOctPredict(
             input=volume,
@@ -28,13 +25,16 @@ if __name__ == "__main__":
             patch_size=256,
             step_size=64,
             normalize=True,
-            pad=True,
-            verbose=True,
+            pad_it=True,
+            padding_method='reflect',
             )
         
+        #for coord_pair in prediction.complete_patch_coords:
+        #   print(coord_pair[2])
+        #print(prediction.complete_patch_coords)
+
         prediction.predict_on_all()
         out_path = f"{unet.version_path}/predictions"
         prediction.save_prediction(dir=out_path)
-
         t2 = time.time()
         print(f"Process took {round((t2-t1)/60, 2)} min")
