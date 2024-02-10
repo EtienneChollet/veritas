@@ -28,7 +28,7 @@ class Unet(object):
             model_dir:str='models',
             synth_params:str='complex',
             synth_dtype:torch.dtype=torch.float32,
-            learning_rate:float=1e-3,
+            learning_rate:float=1e-4,
             device:str='cuda',
             
         ):
@@ -107,6 +107,11 @@ class Unet(object):
                         trainee=trainee,
                         loss=self.losses
                         )
+            else:
+                trainee = train.FineTunedTrainee(
+                    trainee=trainee,
+                    loss=self.losses
+                )
         elif mode == 'test':
             trainee = train.SupervisedTrainee(
                 network=self.segnet,
@@ -114,18 +119,23 @@ class Unet(object):
                 augmentation=None,
                 metrics=self.metrics,
                 lr=self.learning_rate
-            )
+                )
             trainee = train.FineTunedTrainee.load_from_checkpoint(
                 checkpoint_path=Checkpoint(self.checkpoint_dir).last(),
                 trainee=trainee,
-                losses=self.losses
-                )
+                loss=self.losses
+            )
+            #trainee = train.FineTunedTrainee.load_from_checkpoint(
+            #    checkpoint_path=Checkpoint(self.checkpoint_dir).last(),
+            #    trainee=trainee,
+            #    loss=self.losses
+            #    )
         self.trainee = trainee.to(self.device)
         return trainee
     
 
     def new(self, nb_levels=4, nb_features=[32,64,128,256], dropout=0.05, nb_conv=2,
-            kernel_size=3, activation='ReLU', norm='batch'):
+            kernel_size=3, activation='ReLU', norm='instance'):
         """
         nb_levels : int
             Number of convolutional levels for Unet.
@@ -210,7 +220,7 @@ class Unet(object):
         # Logger and checkpoint stuff
         self.logger = TensorBoardLogger(self.output_path, self.model_dir, self.version_n)
         self.checkpoint_callback = ModelCheckpoint(
-            monitor="val_metric_dice", mode="min", every_n_epochs=5,
+            monitor="val_metric_dice", mode="min", every_n_epochs=check_val_every_n_epoch,
             save_last=True, filename='{epoch}-{val_loss:.5f}')
         # Sries vs parallel training
         if self.gpus == 1:
@@ -239,7 +249,7 @@ class Unet(object):
         # Begin training
         trainer_.fit(
             self.trainee,
-            DataLoader(self.train_set, self.batch_size, shuffle=True, num_workers=16, persistent_workers=True),
+            DataLoader(self.train_set, self.batch_size, shuffle=True, num_workers=14, persistent_workers=True),
             DataLoader(self.val_set, self.batch_size, shuffle=False)
             )
 

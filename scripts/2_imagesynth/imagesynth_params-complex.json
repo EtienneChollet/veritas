@@ -3,7 +3,7 @@
         "nb_classes": 6,
         "shape": 5
     },
-    "gamma": [0.2, 1.2],
+    "gamma": [0.2, 2],
     "z_decay": [32],
     "speckle": [0.2, 0.4],
     "imax": 0.50,

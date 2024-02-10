@@ -39,6 +39,7 @@ class VesselSynth(object):
     def __init__(self,
                  device:str='cuda',
                  json_param_path:str='scripts/1_vesselsynth/vesselsynth_params.json',
+                 experiment_dir='synthetic_data',
                  experiment_number=1
                  ):
         """
@@ -51,17 +52,13 @@ class VesselSynth(object):
         """
         # All JIT things need to be handled here. Do not put them outside this class.
         os.environ['PYTORCH_JIT_USE_NNC_NOT_NVFUSER'] = '1'
-        #os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-        #import interpol
-        #interpol.backend.jitfields=True
         backend.jitfields = True
-
         self.device = device
         self.json_params = json.load(open(json_param_path))   # This is the json file that should be one directory above this one. Defines all variables
         self.shape = self.json_params['shape']                           
         self.n_volumes = self.json_params['n_volumes']
         self.begin_at_volume_n = self.json_params['begin_at_volume_n']
-        self.experiment_path = f"output/synthetic_data/exp{experiment_number:04d}"
+        self.experiment_path = f"output/{experiment_dir}/exp{experiment_number:04d}"
         PathTools(self.experiment_path).makeDir()
         self.header = nib.Nifti1Header()
         self.prepOutput(f'{self.experiment_path}/#_vesselsynth_params.json')

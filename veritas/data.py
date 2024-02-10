@@ -307,8 +307,7 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
         self.imprint_tensor = torch.zeros(
             self.tensor.shape, device=self.device, dtype=self.dtype
             )
-        # Increasing "scale" will weight the ends of the patch less.
-        #scale = 1/4
+        # Increasing "scale" will give less weight to the ends of the patch.
         scale = 63/64
         min = torch.pi * scale
         max = ((1/scale) - 1) * (torch.pi * scale)
@@ -327,9 +326,12 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
         """     
         patch, coords = super().__getitem__(idx)
         ## Needs to go on cuda for prediction
-        prediction = self.trainee(patch.unsqueeze(0).unsqueeze(0))
+        if self.device != 'cuda':
+            patch = patch.to('cuda')
+        prediction = self.trainee(patch.unsqueeze(0).unsqueeze(0)).to(self.device)
         prediction = torch.sigmoid(prediction).squeeze()
-        self.imprint_tensor[coords[0], coords[1], coords[2]] += (prediction * self.patch_weight)
+        #prediction = torch.ones((64, 64, 64)).to('cuda')
+        self.imprint_tensor[coords[0], coords[1], coords[2]] += prediction##(prediction * self.patch_weight)
 
     def predict_on_all(self):
         if self.tensor.dtype != torch.float32:
@@ -337,6 +339,7 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
             print('Input tensor needs to be float32!!')
         n_patches = len(self)
         t0 = time.time()
+        print('Starting predictions!!')
         for i in range(n_patches):
             self[i]
             if (i+1) % 100 == 0:
@@ -345,28 +348,29 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
                 sys.stdout.write(f"\rPrediction {i + 1}/{n_patches} | {average_time_per_pred} sec/pred | {round(average_time_per_pred * n_patches / 60, 2)} min total pred time")
                 sys.stdout.flush()
 
-        #patchsize_to_stepsize = self.patch_size // self.step_size
-        #if self.patch_size == 256:
-        #    avg_factor = 8 ** (patchsize_to_stepsize - 1)
-        #elif self.patch_size == 128:
-        #    avg_factor = 8 ** (patchsize_to_stepsize - 1)
-        #elif self.patch_size == 64:
-        #    factors = {1:1, 2:8, 4:64, 8:512}
-        #    avg_factor = factors[patchsize_to_stepsize]
-        #else:
-        #    avg_factor = 1
+        patchsize_to_stepsize = self.patch_size // self.step_size
+        if self.patch_size == 256:
+            avg_factor = 8 ** (patchsize_to_stepsize - 1)
+        elif self.patch_size == 128:
+            avg_factor = 8 ** (patchsize_to_stepsize - 1)
+        elif self.patch_size == 64:
+            factors = {1:1, 2:8, 4:64, 8:512}
+            avg_factor = factors[patchsize_to_stepsize]
+        else:
+            avg_factor = 1
 
         # Remove padding
         s = slice(self.patch_size, -self.patch_size)
         self.imprint_tensor = self.imprint_tensor[s, s, s]
         #print(f"\n\n{avg_factor}x Averaging...")
+        self.imprint_tensor /= 64 #avg_factor
         self.imprint_tensor = self.imprint_tensor.cpu().numpy()
-        self.imprint_tensor -= self.imprint_tensor.min()
+        #self.imprint_tensor -= self.imprint_tensor.min()
         # Normalizing to one based on 98th percentile
         #_max = np.percentile(self.imprint_tensor, 98)
         #self.imprint_tensor = np.clip(self.imprint_tensor, 0, _max)   
         #self.imprint_tensor /= _max
-        self.imprint_tensor /= self.imprint_tensor.max()
+        #self.imprint_tensor /= self.imprint_tensor.max()
 
         # Making binary
         #_mid = np.percentile(self.imprint_tensor, 95)

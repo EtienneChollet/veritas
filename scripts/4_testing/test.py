@@ -10,8 +10,8 @@ if __name__ == "__main__":
 
     with torch.no_grad():
         unet = veritas.Unet(
-            model_dir='paper_models_context_256',
-            version_n=3,
+            model_dir='lets_get_small_vessels',
+            version_n=1,
             device='cuda'
             )
         
@@ -22,8 +22,8 @@ if __name__ == "__main__":
             trainee=unet.trainee,
             dtype=torch.float32,
             device='cuda',
-            patch_size=256,
-            step_size=64,
+            patch_size=64,
+            step_size=16,
             normalize=True,
             pad_it=True,
             padding_method='reflect',
