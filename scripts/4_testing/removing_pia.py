@@ -1,13 +1,18 @@
 from veritas import RealOct
 import nibabel as nib
 
-prediction_path = '/autofs/cluster/octdata2/users/epc28/veritas/output/paper_models_small/version_4/predictions/I46_Somatosensory_20um_crop-prediction_stepsz-16.nii'
-out_path = prediction_path.split('/')[:-1]
-out_path.append(prediction_path.split('/')[-1].strip('.nii') + '_NO-PIA.nii')
-out_path = '/'.join(out_path)
-print(out_path)
 
-pia_mask_path = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/I46_Somatosensory_20um_crop.pia.nii'
+base_path = '/autofs/cluster/octdata2/users/epc28/data/CAA/caa17/occipital'
+
+prediction_path = f'{base_path}/caa17_occipital.nii.gz'
+pia_mask_path = f'{base_path}/caa17_occipital_mask_5x-dilate.nii.gz'
+out_path = f'{base_path}/caa17_occipital-masked.nii.gz'
+
+#out_path = prediction_path.split('/')[:-1]
+#out_path.append(prediction_path.split('/')[-1].strip('.nii') + '_NO-PIA.nii')
+#out_path = '/'.join(out_path)
+#print(out_path)
+
 
 prediction= RealOct(
     input=prediction_path
