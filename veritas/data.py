@@ -137,9 +137,8 @@ class RealOct(object):
 
 
     def normalize_volume(self, input):
+        print('\nNormalizing volume...')
         input -= input.min()
-        #_min = np.percentile(input, 2)
-        #input -= _min
         _max = np.percentile(input, 98)
         input /= _max        
         return input
@@ -150,6 +149,7 @@ class RealOct(object):
         """
         Pad all dimensions of 3 dimensional tensor and update volume.
         """
+        print('\nPadding volume...')
         # Input tensor must be 4 dimensional [1, n, n, n] to do padding
         padding = [self.patch_size] * 6 # Create 6 ele list of patch size
         tensor = torch.nn.functional.pad(

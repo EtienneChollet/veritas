@@ -190,23 +190,24 @@ class OctVolSynthDataset(Dataset):
         label_tensor = label_nifti.get_fdata()
         label_affine = label_nifti.affine
         # Reshaping
-        volume_tensor = np.clip(label_tensor, 0, 127).astype(np.int8)[None]
-        volume_tensor = torch.from_numpy(volume_tensor)
+        print(np.unique(label_tensor))
+        label_tensor = np.clip(label_tensor, 0, 255).astype(np.uint8)[None]
+        label_tensor = torch.from_numpy(label_tensor)
         # Synthesizing volume
         im, prob = OctVolSynth(
             synth_params=self.synth_params
-        )(volume_tensor)
+        )(label_tensor)
         # Converting image and prob map to numpy. Reshaping
         im = im.detach().cpu().numpy().squeeze()
         if self.label_type == 'label':
             prob = prob.to(torch.uint8).detach().cpu().numpy().squeeze()
-            prob[prob >= 1] = 1
+            #prob[prob >= 1] = 1
             # Should be [0, 1]
             #print(prob.min(), prob.max())
-        elif self.label_type != 'label':
-            prob = nib.load(self.y_paths[idx]).get_fdata()
-            prob[prob > 0] = 1
-            prob[prob < 0] = 0
+        #elif self.label_type != 'label':
+        #    prob = nib.load(self.y_paths[idx]).get_fdata()
+        #    prob[prob > 0] = 1
+        #    prob[prob < 0] = 0
         else:
             pass
         if save_nifti == True:
@@ -320,31 +321,31 @@ class OctVolSynth(nn.Module):
         vessel_labels_tensor : tensor
             Tensor of vessels with unique ID integer labels
         """
-        # Get sorted list of all vessel labels for later
-        self.vessel_labels = list(sorted(vessel_labels_tensor.unique().tolist()))[1:]
-        # Generate the number of unique intensities
-        self.nb_unique_intensities = random.randint(2, self.nb_classes_)
         # synthesize the main parenchyma (background tissue)
+        # Get sorted list of all vessel labels for later
+        self.vessel_labels = sorted(vessel_labels_tensor.unique().tolist())
+        self.vessel_labels = [i for i in self.vessel_labels if i != 0]
         parenchyma = self.parenchyma_(vessel_labels_tensor)
-        # synthesize vessels (grouped by intensity)
-        vessels = self.vessels_(vessel_labels_tensor)
-        if self.synth_params == 'complex':
-            # Create another parenchyma-like mask to texturize vessels 
-            vessel_texture = self.vessel_texture_(vessel_labels_tensor)
-            # Texturize vessels!!
-            vessels = torch.mul(vessels, vessel_texture)
-            # Converting label IDs to tensor (we don't need unique IDs anymore,
-            # only a binary mask)
-        # We want the parenchyma (where we are not making changes to intensity)
-        # to remain the same, so we change zeros to ones.
-        vessels[vessels == 0] = 1
-        # "stamping" the vessel scaling factor onto the parenchyma volume
-        final_volume = torch.mul(parenchyma, vessels)
+        self.n_unique_ids = len(self.vessel_labels)
+        # Determine if there are any vessels to deal with
+        if self.n_unique_ids == 0:
+            final_volume = parenchyma
+        elif self.n_unique_ids >= 1:
+            # synthesize vessels (grouped by intensity)
+            vessels = self.vessels_(vessel_labels_tensor)
+            # Create a parenchyma-like mask to texturize vessels 
+            #if self.synth_params == 'complex':
+            #    vessel_texture = self.vessel_texture_(vessel_labels_tensor)
+                # Texturize those vessels!!
+            vessels[vessels == 0] = 1
+            #vessels = torch.mul(vessels, vessel_texture)
+            final_volume = torch.mul(parenchyma, vessels)
         # Normalizing
         final_volume -= final_volume.min()
         final_volume /= final_volume.max()
         # final output needs to be in float32 or else torch throws mismatch error between this and weights tensor.
         final_volume = final_volume.to(torch.float32)
+        vessel_labels_tensor[vessel_labels_tensor >= 1] = 1
         return final_volume, vessel_labels_tensor
         
 
@@ -396,19 +397,17 @@ class OctVolSynth(nn.Module):
         # Need to put this guy on CPU before mask fill operation.
         # Generate an empty tensor that we will fill with vessels and their
         # scaling factors to imprint or "stamp" onto parenchymal volume
-        scaling_tensor = torch.zeros(vessel_labels_tensor.shape, dtype=self.dtype, device=vessel_labels_tensor.device)
+        scaling_tensor = torch.zeros(
+            vessel_labels_tensor.shape,
+            dtype=self.dtype,
+            device=vessel_labels_tensor.device)
         # Calculate the number of elements (vessels) in each intensity group
-        nb_vessels_per_intensity = int(pymath.ceil(len(self.vessel_labels)
-                                                / self.nb_unique_intensities))
         # Iterate through each vessel group based on their unique intensity
-        for int_n in range(self.nb_unique_intensities):
+        for int_n in range(self.n_unique_ids):
             # Assign intensity for this group from uniform distro
-            min_i = self.i_min
-            max_i = self.i_max
-            intensity = Uniform(min_i, max_i)()
+            intensity = Uniform(0.001, 0.75)()
             # Get label ID's of all vessels that will be assigned to this intensity
-            vessel_labels_at_i = self.vessel_labels[int_n * nb_vessels_per_intensity:
-                                            (int_n + 1) * nb_vessels_per_intensity]
+            vessel_labels_at_i = self.vessel_labels[int_n : int_n + 1]
             # Fill the empty tensor with the vessel scaling factors
             for ves_n in vessel_labels_at_i:
                 scaling_tensor.masked_fill_(vessel_labels_tensor == ves_n, intensity)    
