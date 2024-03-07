@@ -13,6 +13,7 @@ import numpy as np
 import nibabel as nib
 from veritas.utils import PathTools, volume_info
 from torch.utils.data import Dataset
+from cornucopia.cornucopia.intensity import QuantileTransform
 
 # Custom imports
 from veritas.utils import Options
@@ -138,9 +139,12 @@ class RealOct(object):
 
     def normalize_volume(self, input):
         print('\nNormalizing volume...')
-        input -= input.min()
-        _max = np.percentile(input, 98)
-        input /= _max        
+        input = torch.from_numpy(input)
+        input = QuantileTransform(pmin=0.02, pmax=0.98)(input)
+        
+        #input -= input.min()
+        #_max = np.percentile(input, 98)
+        #input /= _max        
         return input
         #volume_info(self.tensor, 'Normalized')
 
@@ -301,14 +305,15 @@ class RealOctPatchLoader(RealOct, Dataset):
 
 class RealOctPredict(RealOctPatchLoader, Dataset):
 
-    def __init__(self, trainee=None, *args, **kwargs):
+    def __init__(self, trainee=None, normalize_patches=True, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.trainee = trainee
         self.imprint_tensor = torch.zeros(
             self.tensor.shape, device=self.device, dtype=self.dtype
             )
+        self.normalize_patches=normalize_patches
         # Increasing "scale" will give less weight to the ends of the patch.
-        scale = 63/64
+        scale = 2/5
         min = torch.pi * scale
         max = ((1/scale) - 1) * (torch.pi * scale)
         self.backend = dict(dtype=self.dtype, device=self.device)
@@ -328,10 +333,13 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
         ## Needs to go on cuda for prediction
         if self.device != 'cuda':
             patch = patch.to('cuda')
-        prediction = self.trainee(patch.unsqueeze(0).unsqueeze(0)).to(self.device)
+        patch = patch.unsqueeze(0).unsqueeze(0)
+        if self.normalize_patches == True:
+            patch = QuantileTransform(pmin=0.02, pmax=0.98, vmin=0, vmax=1)(patch)
+        prediction = self.trainee(patch).to(self.device)
         prediction = torch.sigmoid(prediction).squeeze()
         #prediction = torch.ones((64, 64, 64)).to('cuda')
-        self.imprint_tensor[coords[0], coords[1], coords[2]] += prediction##(prediction * self.patch_weight)
+        self.imprint_tensor[coords[0], coords[1], coords[2]] += (prediction * self.patch_weight)
 
     def predict_on_all(self):
         if self.tensor.dtype != torch.float32:
@@ -342,45 +350,21 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
         print('Starting predictions!!')
         for i in range(n_patches):
             self[i]
-            if (i+1) % 100 == 0:
+            if (i+1) % 10 == 0:
                 total_elapsed_time = time.time() - t0
                 average_time_per_pred = round(total_elapsed_time / (i+1), 3)
                 sys.stdout.write(f"\rPrediction {i + 1}/{n_patches} | {average_time_per_pred} sec/pred | {round(average_time_per_pred * n_patches / 60, 2)} min total pred time")
                 sys.stdout.flush()
 
-        patchsize_to_stepsize = self.patch_size // self.step_size
-        if self.patch_size == 256:
-            avg_factor = 8 ** (patchsize_to_stepsize - 1)
-        elif self.patch_size == 128:
-            avg_factor = 8 ** (patchsize_to_stepsize - 1)
-        elif self.patch_size == 64:
-            factors = {1:1, 2:8, 4:64, 8:512}
-            avg_factor = factors[patchsize_to_stepsize]
-        else:
-            avg_factor = 1
-
         # Remove padding
         s = slice(self.patch_size, -self.patch_size)
         self.imprint_tensor = self.imprint_tensor[s, s, s]
-        #print(f"\n\n{avg_factor}x Averaging...")
-        self.imprint_tensor /= 64 #avg_factor
+        redundancy = ((self.patch_size ** 3) // (self.step_size ** 3))
+
+        print(f"\n\n{redundancy}x Averaging...")
+        self.imprint_tensor /= redundancy
         self.imprint_tensor = self.imprint_tensor.cpu().numpy()
-        #self.imprint_tensor -= self.imprint_tensor.min()
-        # Normalizing to one based on 98th percentile
-        #_max = np.percentile(self.imprint_tensor, 98)
-        #self.imprint_tensor = np.clip(self.imprint_tensor, 0, _max)   
-        #self.imprint_tensor /= _max
-        #self.imprint_tensor /= self.imprint_tensor.max()
 
-        # Making binary
-        #_mid = np.percentile(self.imprint_tensor, 95)
-        #self.imprint_tensor[self.imprint_tensor <= _mid] = 0
-        #self.imprint_tensor[self.imprint_tensor > _mid] = 1
-
-        # Nibabel does not support float 16
-        #self.imprint_tensor = self.imprint_tensor.astype(np.uint8)
-        #print(f"Prediction Minimum: {self.imprint_tensor.min()}")
-        #print(f"Prediction Maximum: {self.imprint_tensor.max()}")
 
     def save_prediction(self, dir=None):
         """

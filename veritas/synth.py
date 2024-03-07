@@ -18,8 +18,9 @@ from veritas.utils import PathTools, JsonTools
 from vesselsynth.vesselsynth.utils import backend
 from vesselsynth.vesselsynth.io import default_affine
 from vesselsynth.vesselsynth.synth import SynthVesselOCT
-from cornucopia.cornucopia.labels import RandomSmoothLabelMap
+from cornucopia.cornucopia.labels import RandomSmoothLabelMap, BernoulliDiskTransform
 from cornucopia.cornucopia.noise import RandomGammaNoiseTransform
+from cornucopia.cornucopia.geometric import ElasticTransform
 from cornucopia.cornucopia import RandomSlicewiseMulFieldTransform, RandomGammaTransform
 from cornucopia.cornucopia.random import Uniform, Fixed, RandInt
 
@@ -187,12 +188,10 @@ class OctVolSynthDataset(Dataset):
         """
         # Loading nifti and affine
         label_nifti = nib.load(self.label_paths[idx])
-        label_tensor = label_nifti.get_fdata()
         label_affine = label_nifti.affine
-        # Reshaping
-        print(np.unique(label_tensor))
-        label_tensor = np.clip(label_tensor, 0, 255).astype(np.uint8)[None]
-        label_tensor = torch.from_numpy(label_tensor)
+        # Loading tensor into torch
+        label_tensor = torch.from_numpy(label_nifti.get_fdata()).to(self.device)
+        label_tensor = torch.clip(label_tensor, 0, 255).to(torch.uint8)[None]
         # Synthesizing volume
         im, prob = OctVolSynth(
             synth_params=self.synth_params
@@ -324,9 +323,21 @@ class OctVolSynth(nn.Module):
         # synthesize the main parenchyma (background tissue)
         # Get sorted list of all vessel labels for later
         self.vessel_labels = sorted(vessel_labels_tensor.unique().tolist())
-        self.vessel_labels = [i for i in self.vessel_labels if i != 0]
+        self.vessel_labels.remove(0)
+
+        # Randomly make a negative control
+        if random.randint(1, 10) == 7:
+            vessel_labels_tensor[vessel_labels_tensor > 0] = 0
+            self.n_unique_ids = 0
+        else:
+            # Hide some vessels randomly
+            self.n_unique_ids = len(self.vessel_labels)
+            number_vessels_to_hide = random.randint(0, self.n_unique_ids - 1)
+            vessel_ids_to_hide = random.choices(range(1, self.n_unique_ids), k=number_vessels_to_hide)
+            for id in vessel_ids_to_hide:
+                vessel_labels_tensor[vessel_labels_tensor == id] = 0
+
         parenchyma = self.parenchyma_(vessel_labels_tensor)
-        self.n_unique_ids = len(self.vessel_labels)
         # Determine if there are any vessels to deal with
         if self.n_unique_ids == 0:
             final_volume = parenchyma
@@ -364,18 +375,37 @@ class OctVolSynth(nn.Module):
         # Add 1 so that we can work with every single pixel (no zeros)
         parenchyma = RandomSmoothLabelMap(
             nb_classes=random.randint(2, self.nb_classes_),
-            shape=random.randint(2, self.shape_)
+            shape=random.randint(2, self.shape_),
             )(vessel_labels_tensor).to(self.dtype) + 1
+
         # Applying speckle noise model
         parenchyma = RandomGammaNoiseTransform(
             sigma=Uniform(self.speckle_a, self.speckle_b)
-            )(parenchyma)[0]
+            )(parenchyma)#[0]
         # Applying z-stitch artifact
         if self.synth_params == 'complex':
+            #balls1 = BernoulliDiskTransform(
+            #    prob=1e-3,
+            #    radius=random.randint(2, 10),
+            #    value=random.uniform(0.01, 1.99)
+            #    )(parenchyma)[0]
+            
+            #balls2 = BernoulliDiskTransform(
+            #    prob=5e-4,
+            #    radius=random.randint(2, 10),
+            #    value=random.uniform(0.01, 1.99),
+            #)(parenchyma)[0]
+
+            #balls = balls1 + balls2
+            
+            #balls = ElasticTransform(shape=10)(balls)
+            #parenchyma *= balls
+
             parenchyma = RandomSlicewiseMulFieldTransform(
                 thickness=self.thickness_
                 )(parenchyma)
         parenchyma = RandomGammaTransform((self.gamma_a, self.gamma_b))(parenchyma)
+
         parenchyma -= parenchyma.min()
         parenchyma /= parenchyma.max()
         return parenchyma
@@ -405,7 +435,7 @@ class OctVolSynth(nn.Module):
         # Iterate through each vessel group based on their unique intensity
         for int_n in range(self.n_unique_ids):
             # Assign intensity for this group from uniform distro
-            intensity = Uniform(0.001, 0.75)()
+            intensity = Uniform(self.i_min, self.i_max)()
             # Get label ID's of all vessels that will be assigned to this intensity
             vessel_labels_at_i = self.vessel_labels[int_n : int_n + 1]
             # Fill the empty tensor with the vessel scaling factors

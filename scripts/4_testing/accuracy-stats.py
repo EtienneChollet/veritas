@@ -37,9 +37,12 @@ class IRV(object):
         dice = (2 * intersection) / (self.gt1.sum() + self.gt2.sum())
         print(dice)
 
-version = 2564
 
-prediction = f'/autofs/cluster/octdata2/users/epc28/veritas/output/lets_get_small_vessels/version_{version}/predictions/I46_Somatosensory_20um_crop-prediction_stepsz-64.nii'
+model_dir = 'lets_get_small_vessels-v2'
+version = 2568
+
+
+prediction = f'/autofs/cluster/octdata2/users/epc28/veritas/output/{model_dir}/version_{version}/predictions/I46_Somatosensory_20um_crop-prediction_stepsz-64.nii'
 ground_truth = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/ground_truth.nii'
 tissue_mask = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/I46_Somatosensory_20um_crop.pia.nii'
 irv = IRV(ground_truth, prediction, threshold=0.5, tissue_mask=tissue_mask)

@@ -7,5 +7,5 @@ backend.jitfields = True
 if __name__ == "__main__":
     torch.no_grad()
     VesselSynth(
-        experiment_number=32
+        experiment_number=3
         ).synth()
