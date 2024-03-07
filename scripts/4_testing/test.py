@@ -4,14 +4,14 @@ import torch
 
 if __name__ == "__main__":   
     
-    volume = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/I46_Somatosensory_20um_crop.nii'
+    #volume = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/I46_Somatosensory_20um_crop.nii'
     #volume = '/autofs/cluster/octdata2/users/epc28/data/CAA/caa17/occipital/caa17_occipital.nii'
-    #volume = '/autofs/cluster/octdata/users/cmagnain/190312_I46_SomatoSensory/I46_Somatosensory_20um_averaging_new.nii'
+    volume = '/autofs/cluster/octdata/users/cmagnain/190312_I46_SomatoSensory/I46_Somatosensory_20um_averaging_new.nii'
     
     #versions = [4, 5]
     #for v in versions:
     
-    v = 10
+    v = 2
 
     t1 = time.time()
     with torch.no_grad():
@@ -27,7 +27,7 @@ if __name__ == "__main__":
             input=volume,
             trainee=unet.trainee,
             dtype=torch.float32,
-            device='cuda',
+            device='cpu',
             patch_size=256,
             step_size=64,
             normalize=True,

@@ -140,11 +140,10 @@ class RealOct(object):
     def normalize_volume(self, input):
         print('\nNormalizing volume...')
         input = torch.from_numpy(input)
-        input = QuantileTransform(pmin=0.02, pmax=0.98)(input)
-        
-        #input -= input.min()
+        #input = QuantileTransform(pmin=0.02, pmax=0.98)(input)
+        input -= input.min()
+        input /= input.max()  
         #_max = np.percentile(input, 98)
-        #input /= _max        
         return input
         #volume_info(self.tensor, 'Normalized')
 

@@ -1,5 +1,6 @@
 \scripts/videos/*
 \output/*
+\output_old/*
 *.ipynb
 *.tiff
 *.tif

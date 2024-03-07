@@ -201,68 +201,70 @@ class Confusion(object):
         print(f'FN: {out_vol.sum()}')
         return out_vol, rgb
     
-my_segmentation = '/autofs/cluster/octdata2/users/epc28/veritas/output/paper_models_ablation/version_11/predictions/I46_Somatosensory_20um_crop-prediction_stepsz-16.nii'
-james_segmentation = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/ground_truth.nii'
 
-confusion = Confusion(my_segmentation, james_segmentation, binary_threshold=0.005)
-tp = confusion.true_positives()[0].sum()
-fn = confusion.false_negatives()[0].sum()
-fp = confusion.false_positives()[0].sum()
+if __name__ == '__main__':
+    my_segmentation = '/autofs/cluster/octdata2/users/epc28/veritas/output/paper_models_ablation/version_11/predictions/I46_Somatosensory_20um_crop-prediction_stepsz-16.nii'
+    james_segmentation = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/ground_truth.nii'
 
-dice_score = round((2 * tp) / ((2 * tp) + fp + fn), 3)
-print(dice_score)
+    confusion = Confusion(my_segmentation, james_segmentation, binary_threshold=0.005)
+    tp = confusion.true_positives()[0].sum()
+    fn = confusion.false_negatives()[0].sum()
+    fp = confusion.false_positives()[0].sum()
 
-exit(0)
-prediction = '/autofs/cluster/octdata2/users/epc28/veritas/output/models/version_8/predictions/caa17_occipital.nii.gz-prediction_stepsz-256.nii'
-Visualize(in_path=prediction).main()
+    dice_score = round((2 * tp) / ((2 * tp) + fp + fn), 3)
+    print(dice_score)
 
-
-binary_threshold = 0.5
-model_version = 1
-
-vol_path = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/I46_Somatosensory_20um_crop.nii'
-ground_truth = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/ground_truth.nii'
-prediction = f'/autofs/cluster/octdata2/users/epc28/veritas/output/paper_models_64/version_{model_version}/predictions/I46_Somatosensory_20um_crop-prediction_stepsz-16.nii'
-prediction = '/autofs/cluster/octdata2/users/epc28/veritas/output/paper_models_small/version_1/predictions/post_processed_thresh-0.5/20vx-removed.nii'
+    exit(0)
+    prediction = '/autofs/cluster/octdata2/users/epc28/veritas/output/models/version_8/predictions/caa17_occipital.nii.gz-prediction_stepsz-256.nii'
+    Visualize(in_path=prediction).main()
 
 
-out_name = prediction.split('/')[-1].strip('.nii')
-prediction_dir = '/'.join(prediction.split('/')[:-1])
+    binary_threshold = 0.5
+    model_version = 1
 
-# true positive = yellow, false positive = red, false negative = green
-confusion = Confusion(ground_truth, prediction, binary_threshold=binary_threshold)
-tp, tp_rgb = confusion.true_positives()
-fp, fp_rgb = confusion.false_positives()
-fn, fn_rgb = confusion.false_negatives()
+    vol_path = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/I46_Somatosensory_20um_crop.nii'
+    ground_truth = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/ground_truth.nii'
+    prediction = f'/autofs/cluster/octdata2/users/epc28/veritas/output/paper_models_64/version_{model_version}/predictions/I46_Somatosensory_20um_crop-prediction_stepsz-16.nii'
+    prediction = '/autofs/cluster/octdata2/users/epc28/veritas/output/paper_models_small/version_1/predictions/post_processed_thresh-0.5/20vx-removed.nii'
 
-dice_score = round((2 * tp.sum()) / ((2 * tp.sum()) + fp.sum() + fn.sum()), 3)
-print(f"DICE SCORE: {dice_score}")
-out_path = f"{prediction_dir}/{out_name}_thresh-{binary_threshold}_dice-{dice_score}.tiff"
-#out_path = f"{prediction_dir}/{out_name}.tiff"
 
-vis = Visualize(vol_path, out_path=out_path)
-vis.overlay(tp, name='true_positives', rgb=tp_rgb, binary_threshold=binary_threshold)
-vis.overlay(fp, name='false_positives', rgb=fp_rgb, binary_threshold=binary_threshold)
-vis.overlay(fn, name='false_negatives', rgb=fn_rgb, binary_threshold=binary_threshold)
-vis.make_tiff()
-print(f"{dice_score}\n{tp.sum()}\n{fp.sum()}\n{fn.sum()}")
+    out_name = prediction.split('/')[-1].strip('.nii')
+    prediction_dir = '/'.join(prediction.split('/')[:-1])
 
-##### Saving binarized volume as nifti to do segment analysis :)
+    # true positive = yellow, false positive = red, false negative = green
+    confusion = Confusion(ground_truth, prediction, binary_threshold=binary_threshold)
+    tp, tp_rgb = confusion.true_positives()
+    fp, fp_rgb = confusion.false_positives()
+    fn, fn_rgb = confusion.false_negatives()
 
-prediction_tensor = RealOct(
-    input=prediction,
-    binarize=True,
-    binary_threshold=binary_threshold,
-    device='cpu',
-    dtype=torch.float32
-)
-binarized_volume = prediction_tensor.tensor.cpu().numpy()
-affine = prediction_tensor.affine
-out_nifti = nib.nifti1.Nifti1Image(dataobj=binarized_volume, affine=affine)
-binarized_volume_path = prediction.split('/')[-1].strip('.nii')
-binarized_volume_name = f'{binarized_volume_path}_thresh-{binary_threshold}_BINARIZED.nii'
-binarized_volume_path = prediction.split('/')[:-1]
-binarized_volume_path.append(binarized_volume_name)
-binarized_volume_path = '/'.join(binarized_volume_path)
+    dice_score = round((2 * tp.sum()) / ((2 * tp.sum()) + fp.sum() + fn.sum()), 3)
+    print(f"DICE SCORE: {dice_score}")
+    out_path = f"{prediction_dir}/{out_name}_thresh-{binary_threshold}_dice-{dice_score}.tiff"
+    #out_path = f"{prediction_dir}/{out_name}.tiff"
 
-nib.save(out_nifti, binarized_volume_path)
+    vis = Visualize(vol_path, out_path=out_path)
+    vis.overlay(tp, name='true_positives', rgb=tp_rgb, binary_threshold=binary_threshold)
+    vis.overlay(fp, name='false_positives', rgb=fp_rgb, binary_threshold=binary_threshold)
+    vis.overlay(fn, name='false_negatives', rgb=fn_rgb, binary_threshold=binary_threshold)
+    vis.make_tiff()
+    print(f"{dice_score}\n{tp.sum()}\n{fp.sum()}\n{fn.sum()}")
+
+    ##### Saving binarized volume as nifti to do segment analysis :)
+
+    prediction_tensor = RealOct(
+        input=prediction,
+        binarize=True,
+        binary_threshold=binary_threshold,
+        device='cpu',
+        dtype=torch.float32
+    )
+    binarized_volume = prediction_tensor.tensor.cpu().numpy()
+    affine = prediction_tensor.affine
+    out_nifti = nib.nifti1.Nifti1Image(dataobj=binarized_volume, affine=affine)
+    binarized_volume_path = prediction.split('/')[-1].strip('.nii')
+    binarized_volume_name = f'{binarized_volume_path}_thresh-{binary_threshold}_BINARIZED.nii'
+    binarized_volume_path = prediction.split('/')[:-1]
+    binarized_volume_path.append(binarized_volume_name)
+    binarized_volume_path = '/'.join(binarized_volume_path)
+
+    nib.save(out_nifti, binarized_volume_path)

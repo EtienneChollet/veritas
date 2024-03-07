@@ -1,48 +1,12 @@
-import scipy
-import torch
 import numpy as np
-import pandas as pd
 import nibabel as nib
-from scipy.ndimage import label
+from veritas.postprocessing import volumeFilter
 
 
-version = 10
+version = 2
 out_dtype = np.uint8
 threshold = 0.5
 step_size = 64
-
-
-def volumeFilter(arr, min_vx=20):
-    print(f'Filtering out connected components under {min_vx} voxels...')
-    structure = np.ones((3, 3, 3), dtype=np.uint8)
-    labeled_arr, n_components = label(arr, structure)
-
-    hist = scipy.ndimage.histogram(
-        labeled_arr,
-        min=0,
-        max=n_components,
-        bins=n_components+1
-        )
-
-    df = pd.DataFrame(
-        data=hist,
-        columns=['volume'],
-        index=range(0, n_components+1)
-        )
-
-    df = df[df.volume < min_vx]
-    labels_to_keep = list(df.index)
-    labeled_arr = torch.from_numpy(labeled_arr).to('cuda')
-    print(f'Removing {len(labels_to_keep)} components...')
-
-
-    for id in labels_to_keep:
-        labeled_arr[labeled_arr == id] = 0
-    labeled_arr[labeled_arr > 0] = 1
-
-    labeled_arr = labeled_arr.cpu().numpy()
-    return labeled_arr
-    
 
 
 # GROUND TRUTH
