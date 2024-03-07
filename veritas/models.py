@@ -169,7 +169,7 @@ class Unet(object):
     def train_it(self, data_experiment_number, train_to_val:float=0.95, batch_size:int=1,
                  epochs=1000, check_val_every_n_epoch:int=1,
                  accumulate_gradient_n_batches:int=1, subset=None,
-                 texturize_vessels:bool=True, z_decay:bool=True):
+                 texturize_vessels:bool=True, z_decay:bool=True, num_workers=20):
         """
         Train unet after defining or loading model.
         Trainer
@@ -205,6 +205,7 @@ class Unet(object):
         self.subset = subset
         self.texturize_vessels = texturize_vessels
         self.z_decay = z_decay
+        self.num_workers=num_workers
         self.gpus=int(torch.cuda.device_count())
         label_paths = glob(f'output/synthetic_data/exp{data_experiment_number:04d}/*label*')
         # Datasets
@@ -227,6 +228,7 @@ class Unet(object):
             self.sequential_train()
         elif self.gpus >= 2:
             self.distributed_train()
+        
 
     def sequential_train(self):
         """
@@ -239,7 +241,6 @@ class Unet(object):
             accelerator='gpu',
             check_val_every_n_epoch=self.check_val_every_n_epoch,
             accumulate_grad_batches=self.accumulate_gradient_n_batches,
-            devices=1,
             logger=self.logger,
             callbacks=[self.checkpoint_callback],
             max_epochs=self.epochs,
@@ -249,7 +250,7 @@ class Unet(object):
         # Begin training
         trainer_.fit(
             self.trainee,
-            DataLoader(self.train_set, self.batch_size, shuffle=True, num_workers=14, persistent_workers=True),
+            DataLoader(self.train_set, self.batch_size, shuffle=True, num_workers=self.num_workers, persistent_workers=True),
             DataLoader(self.val_set, self.batch_size, shuffle=False)
             )
 
@@ -258,13 +259,13 @@ class Unet(object):
         Train on multiple GPU devices.
         """
         print(f"Training on {self.gpus} gpus in cluster.")
-        mp.set_start_method('spawn', force=True)
+        #mp.set_start_method('spawn', force=True)
         trainer_ = Trainer(
             accelerator='gpu',
             accumulate_grad_batches=self.accumulate_gradient_n_batches,
             check_val_every_n_epoch=self.check_val_every_n_epoch,
             devices=self.gpus,
-            strategy='ddp',
+            strategy='fsdp', #fsdp, ddp
             num_nodes=1,
             callbacks=[self.checkpoint_callback],
             logger=self.logger,
@@ -273,19 +274,26 @@ class Unet(object):
             #gradient_clip_val=0.5,
             #gradient_clip_algorithm='value'
         )
-        n_processes = self.gpus
         self.segnet.share_memory()
-        processes = []
-        for rank in range(n_processes):
-            process = mp.Process(target=trainer_.fit(
-                self.trainee,
-                DataLoader(self.train_set, self.batch_size, shuffle=True),
-                DataLoader(self.val_set, self.batch_size, shuffle=False)),
-                args=(self.segnet,))
-            process.start()
-            processes.append(process)
-        for proc in processes:
-            proc.join()
+        trainer_.fit(
+            self.trainee,
+            DataLoader(self.train_set, self.batch_size, shuffle=True, num_workers=5, persistent_workers=True),
+            DataLoader(self.val_set, self.batch_size, shuffle=False)
+            )
+
+        #n_processes = self.gpus
+        #self.segnet.share_memory()
+        #processes = []
+        #for rank in range(n_processes):
+        #    process = mp.Process(target=trainer_.fit(
+        #        self.trainee,
+        #        DataLoader(self.train_set, self.batch_size, shuffle=True),
+        #        DataLoader(self.val_set, self.batch_size, shuffle=False)),
+        #        args=(self.segnet,))
+        #    process.start()
+        #    processes.append(process)
+        #for proc in processes:
+        #    proc.join()
 
     #def get_dataloader(self):
     #    self.train_loader = DataLoader(self.train_set, self.batch_size, shuffle=True)

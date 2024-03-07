@@ -121,7 +121,7 @@ class ConnectedComponents(object):
             pass
 
         regions = regionprops(labeled_arr)
-        base_dir = '/autofs/cluster/octdata2/users/epc28/veritas/output/lets_get_small_vessels/version_2561/predictions/connected-components-analysis'
+        base_dir = '/autofs/cluster/octdata2/users/epc28/veritas/output_old/models/version_8/predictions/best/connected-components-analysis'
 
         region_coords = regions[i].bbox
         x = slice(region_coords[0], region_coords[3])
@@ -142,15 +142,17 @@ class ConnectedComponents(object):
         out_name = f'{base_dir}/connected-component-{i}.nii.gz'
         nib.save(nift, out_name)
 
-#path = "/autofs/cluster/octdata2/users/epc28/veritas/output/lets_get_small_vessels/version_2561/predictions/v2561_I46_Somatosensory_20um_crop-prediction_stepsz-64_thresh-0.5.nii.gz"
-#path = "/autofs/cluster/octdata2/users/epc28/veritas/output/lets_get_small_vessels/version_2561/predictions/caa17_occipital-prediction_stepsz-64_thresh-0.5.nii.gz"
-path = '/autofs/cluster/octdata2/users/epc28/data/CAA/caa17/occipital/caa17_prediction-masked.nii.gz'
+if __name__ == 'main':
+    #path = "/autofs/cluster/octdata2/users/epc28/veritas/output/lets_get_small_vessels/version_2561/predictions/v2561_I46_Somatosensory_20um_crop-prediction_stepsz-64_thresh-0.5.nii.gz"
+    #path = "/autofs/cluster/octdata2/users/epc28/veritas/output/lets_get_small_vessels/version_2561/predictions/caa17_occipital-prediction_stepsz-64_thresh-0.5.nii.gz"
+    #path = '/autofs/cluster/octdata2/users/epc28/data/CAA/caa17/occipital/caa17_prediction-masked.nii.gz'
+    path = '/autofs/cluster/octdata2/users/epc28/veritas/output_old/models/version_8/predictions/best/caa17_occipital-prediction_masked.nii.gz'
 
 
-segmentation_arr, segmentation_aff = ConnectedComponents.load_segmentation(path)
-labeled_arr, n_components = ConnectedComponents.connected_components(segmentation_arr)
-label_df = ConnectedComponents.get_df(labeled_arr, n_components, min_vol=7000)
-labeled_arr = ConnectedComponents.renumber_labels(labeled_arr, label_df)
+    segmentation_arr, segmentation_aff = ConnectedComponents.load_segmentation(path)
+    labeled_arr, n_components = ConnectedComponents.connected_components(segmentation_arr)
+    label_df = ConnectedComponents.get_df(labeled_arr, n_components, min_vol=7000)
+    labeled_arr = ConnectedComponents.renumber_labels(labeled_arr, label_df)
 
-for i in range(0, 10):
-    ConnectedComponents.save_id(labeled_arr, i, segmentation_aff)
+    for i in range(0, 10):
+        ConnectedComponents.save_id(labeled_arr, i, segmentation_aff)

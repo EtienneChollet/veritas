@@ -33,7 +33,7 @@ class Options(object):
             stem += f"_{self.attribute_dict['accuracy_name']}-{self.attribute_dict['accuracy_val']}"
         except:
             pass
-        stem += '.nii'
+        stem += '.nii.gz'
         if dir is None:
             self.out_dir = f"/{self.attribute_dict['volume_dir']}/predictions"
         else:
