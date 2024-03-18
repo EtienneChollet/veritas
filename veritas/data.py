@@ -116,34 +116,30 @@ class RealOct(object):
             nifti = nib.load(input)
             # Load tensor on device with dtype. Detach from graph.
             tensor = nifti.get_fdata()
-            #tensor = torch.as_tensor(
-            #    nifti.get_fdata(), device=self.device, dtype=self.dtype
-            #    ).detach()
             affine = nifti.affine
         elif isinstance(input, torch.Tensor):
             tensor = input.to(self.device).to(self.dtype).detach()
             nifti = None
-            # needs identity matrix for affine
         #volume_info(tensor, 'Raw')
         if normalize == True:
             tensor = self.normalize_volume(tensor)
         # Needs to be a tensor for padding operations
-        tensor = torch.as_tensor(tensor, device=self.device, dtype=self.dtype).detach()
+        tensor = torch.as_tensor(tensor, device=self.device).detach()
         if pad_it == True:
             tensor = self.pad_volume(tensor)
         if self.binarize == True:
             tensor[tensor <= self.binary_threshold] = 0
             tensor[tensor > self.binary_threshold] = 1
+        tensor = tensor.to(self.dtype)
         return tensor, nifti, affine
 
 
     def normalize_volume(self, input):
         print('\nNormalizing volume...')
-        input = torch.from_numpy(input)
-        #input = QuantileTransform(pmin=0.02, pmax=0.98)(input)
+        input = torch.from_numpy(input).to(self.device)
         input -= input.min()
-        input /= input.max()  
-        #_max = np.percentile(input, 98)
+        input /= input.max()
+        #input = QuantileTransform(pmin=0.02, pmax=0.98)(input)
         return input
         #volume_info(self.tensor, 'Normalized')
 

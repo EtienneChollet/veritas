@@ -21,7 +21,7 @@ from vesselsynth.vesselsynth.synth import SynthVesselOCT
 from cornucopia.cornucopia.labels import RandomSmoothLabelMap, BernoulliDiskTransform
 from cornucopia.cornucopia.noise import RandomGammaNoiseTransform
 from cornucopia.cornucopia.geometric import ElasticTransform
-from cornucopia.cornucopia import RandomSlicewiseMulFieldTransform, RandomGammaTransform
+from cornucopia.cornucopia import RandomSlicewiseMulFieldTransform, RandomGammaTransform, RandomMulFieldTransform
 from cornucopia.cornucopia.random import Uniform, Fixed, RandInt
 
 
@@ -345,11 +345,11 @@ class OctVolSynth(nn.Module):
             # synthesize vessels (grouped by intensity)
             vessels = self.vessels_(vessel_labels_tensor)
             # Create a parenchyma-like mask to texturize vessels 
-            #if self.synth_params == 'complex':
-            #    vessel_texture = self.vessel_texture_(vessel_labels_tensor)
+            if self.synth_params == 'complex':
+                vessel_texture = self.vessel_texture_(vessel_labels_tensor)
                 # Texturize those vessels!!
             vessels[vessels == 0] = 1
-            #vessels = torch.mul(vessels, vessel_texture)
+            vessels = torch.mul(vessels, vessel_texture)
             final_volume = torch.mul(parenchyma, vessels)
         # Normalizing
         final_volume -= final_volume.min()
@@ -400,10 +400,12 @@ class OctVolSynth(nn.Module):
             
             #balls = ElasticTransform(shape=10)(balls)
             #parenchyma *= balls
-
             parenchyma = RandomSlicewiseMulFieldTransform(
                 thickness=self.thickness_
                 )(parenchyma)
+            
+        elif self.synth_params == 'simple':
+            parenchyma = RandomMulFieldTransform(5)(parenchyma)
         parenchyma = RandomGammaTransform((self.gamma_a, self.gamma_b))(parenchyma)
 
         parenchyma -= parenchyma.min()

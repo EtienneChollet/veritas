@@ -4,15 +4,12 @@ import torch
 
 if __name__ == "__main__":   
     
-    #volume = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/I46_Somatosensory_20um_crop.nii'
+    volume = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/I46_Somatosensory_20um_crop.nii'
     #volume = '/autofs/cluster/octdata2/users/epc28/data/CAA/caa17/occipital/caa17_occipital.nii'
-    volume = '/autofs/cluster/octdata/users/cmagnain/190312_I46_SomatoSensory/I46_Somatosensory_20um_averaging_new.nii'
-    
-    #versions = [4, 5]
-    #for v in versions:
-    
-    v = 2
+    #volume = '/autofs/cluster/octdata/users/cmagnain/190312_I46_SomatoSensory/I46_Somatosensory_20um_averaging_new.nii'
 
+    v = 2222
+    #for v in versions:
     t1 = time.time()
     with torch.no_grad():
         unet = veritas.Unet(
@@ -27,7 +24,7 @@ if __name__ == "__main__":
             input=volume,
             trainee=unet.trainee,
             dtype=torch.float32,
-            device='cpu',
+            device='cuda',
             patch_size=256,
             step_size=64,
             normalize=True,
@@ -36,10 +33,6 @@ if __name__ == "__main__":
             normalize_patches=False,
             )
         
-        #for coord_pair in prediction.complete_patch_coords:
-        #   print(coord_pair[2])
-        #print(prediction.complete_patch_coords)
-
         prediction.predict_on_all()
         out_path = f"{unet.version_path}/predictions"
         prediction.save_prediction(dir=out_path)

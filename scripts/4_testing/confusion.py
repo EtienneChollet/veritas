@@ -3,7 +3,7 @@ import nibabel as nib
 from veritas.postprocessing import volumeFilter
 
 
-version = 2
+version = 53
 out_dtype = np.uint8
 threshold = 0.5
 step_size = 64
@@ -40,6 +40,10 @@ v8_prediction = volumeFilter(v8_prediction)
 prediction[tissue_mask >= 1] = 0
 v8_prediction[tissue_mask >= 1] = 0
 # Saving binarized prediction
+
+prediction = prediction.cpu().numpy()
+v8_prediction = v8_prediction.cpu().numpy()
+
 prediction_binary_out = f'/autofs/cluster/octdata2/users/epc28/veritas/output/models/version_{version}/predictions/v{version}_I46_Somatosensory_20um_crop-prediction_stepsz-{step_size}_thresh-0.5.nii.gz'
 prediction_binary_out_nifti = nib.nifti1.Nifti1Image(dataobj=prediction, affine=affine)
 nib.save(prediction_binary_out_nifti, prediction_binary_out)
