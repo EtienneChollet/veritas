@@ -21,7 +21,7 @@ from vesselsynth.vesselsynth.synth import SynthVesselOCT
 from cornucopia.cornucopia.labels import RandomSmoothLabelMap, BernoulliDiskTransform
 from cornucopia.cornucopia.noise import RandomGammaNoiseTransform
 from cornucopia.cornucopia.geometric import ElasticTransform
-from cornucopia.cornucopia import RandomSlicewiseMulFieldTransform, RandomGammaTransform, RandomMulFieldTransform
+from cornucopia.cornucopia import RandomSlicewiseMulFieldTransform, RandomGammaTransform, RandomMulFieldTransform, RandomGaussianMixtureTransform
 from cornucopia.cornucopia.random import Uniform, Fixed, RandInt
 
 
@@ -377,6 +377,9 @@ class OctVolSynth(nn.Module):
             nb_classes=random.randint(2, self.nb_classes_),
             shape=random.randint(2, self.shape_),
             )(vessel_labels_tensor).to(self.dtype) + 1
+        parenchyma = RandomGaussianMixtureTransform()(parenchyma)
+        parenchyma -= parenchyma.min()
+        parenchyma /= parenchyma.max()
 
         # Applying speckle noise model
         parenchyma = RandomGammaNoiseTransform(
@@ -462,16 +465,18 @@ class OctVolSynth(nn.Module):
         # Create the label map of parenchyma but convert to float32 for further computations
         # Add 1 so that we can work with every single pixel (no zeros)
         nb_classes = RandInt(2, self.nb_classes_)()
-        parenchyma = RandomSmoothLabelMap(
+        vessel_texture = RandomSmoothLabelMap(
             nb_classes=Fixed(nb_classes),
             shape=self.shape_
             )(vessel_labels_tensor).to(self.dtype) + 1
-        # Applying speckle noise model
-        #parenchyma = RandomGammaTransform((self.gamma_a, self.gamma_b))(parenchyma)
-        parenchyma -= parenchyma.min()
-        parenchyma /= parenchyma.max()
-        parenchyma[parenchyma <= 0] = 1e-1
-        parenchyma /= 4
-        parenchyma -= 1
-        parenchyma = abs(parenchyma)
-        return parenchyma
+        # Applying gaussian mixture
+        vessel_texture = RandomGaussianMixtureTransform()(vessel_texture)
+        # Normalizing and changing zeros to some arbitrary small number
+        vessel_texture -= vessel_texture.min()
+        vessel_texture /= vessel_texture.max()
+        vessel_texture[vessel_texture <= 0] = 1e-1
+        # Scaling tensor intensities between [0.75, ~1]
+        vessel_texture /= 4
+        vessel_texture -= 1
+        vessel_texture = abs(vessel_texture)
+        return vessel_texture
