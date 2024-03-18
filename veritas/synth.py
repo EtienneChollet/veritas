@@ -376,8 +376,8 @@ class OctVolSynth(nn.Module):
         parenchyma = RandomSmoothLabelMap(
             nb_classes=random.randint(2, self.nb_classes_),
             shape=random.randint(2, self.shape_),
-            )(vessel_labels_tensor).to(self.dtype) + 1
-        parenchyma = RandomGaussianMixtureTransform()(parenchyma)
+            )(vessel_labels_tensor) + 1
+        parenchyma = RandomGaussianMixtureTransform(dtype=self.dtype)(parenchyma)
         parenchyma -= parenchyma.min()
         parenchyma /= parenchyma.max()
 
@@ -467,16 +467,18 @@ class OctVolSynth(nn.Module):
         nb_classes = RandInt(2, self.nb_classes_)()
         vessel_texture = RandomSmoothLabelMap(
             nb_classes=Fixed(nb_classes),
-            shape=self.shape_
-            )(vessel_labels_tensor).to(self.dtype) + 1
+            shape=self.shape_,
+            )(vessel_labels_tensor) + 1
         # Applying gaussian mixture
-        vessel_texture = RandomGaussianMixtureTransform()(vessel_texture)
-        # Normalizing and changing zeros to some arbitrary small number
+        vessel_texture = RandomGaussianMixtureTransform(
+            dtype=self.dtype
+            )(vessel_texture)
+        # Normalizing and clamping min
         vessel_texture -= vessel_texture.min()
         vessel_texture /= vessel_texture.max()
-        vessel_texture[vessel_texture <= 0] = 1e-1
+        vessel_texture.clamp_min_(1e-1)
         # Scaling tensor intensities between [0.75, ~1]
-        vessel_texture /= 4
-        vessel_texture -= 1
-        vessel_texture = abs(vessel_texture)
+        #vessel_texture /= 4
+        #vessel_texture -= 1
+        vessel_texture.abs_()
         return vessel_texture
