@@ -14,7 +14,7 @@ import nibabel as nib
 import random
 
 # Custom Imports
-from veritas.utils import PathTools, JsonTools
+from veritas.utils import PathTools, JsonTools, volume_info
 from vesselsynth.vesselsynth.utils import backend
 from vesselsynth.vesselsynth.io import default_affine
 from vesselsynth.vesselsynth.synth import SynthVesselOCT
@@ -23,6 +23,7 @@ from cornucopia.cornucopia.noise import RandomGammaNoiseTransform
 from cornucopia.cornucopia.geometric import ElasticTransform
 from cornucopia.cornucopia import RandomSlicewiseMulFieldTransform, RandomGammaTransform, RandomMulFieldTransform, RandomGaussianMixtureTransform
 from cornucopia.cornucopia.random import Uniform, Fixed, RandInt
+from cornucopia.cornucopia.intensity import QuantileTransform
 
 
 from veritas.utils import PathTools
@@ -343,17 +344,15 @@ class OctVolSynth(nn.Module):
             final_volume = parenchyma
         elif self.n_unique_ids >= 1:
             # synthesize vessels (grouped by intensity)
-            vessels = self.vessels_(vessel_labels_tensor)
-            # Create a parenchyma-like mask to texturize vessels 
+            vessels = self.vessels_(vessel_labels_tensor) 
             if self.synth_params == 'complex':
+                # Create a parenchyma-like mask to texturize vessels
                 vessel_texture = self.vessel_texture_(vessel_labels_tensor)
-                # Texturize those vessels!!
             vessels[vessels == 0] = 1
             vessels = torch.mul(vessels, vessel_texture)
             final_volume = torch.mul(parenchyma, vessels)
         # Normalizing
-        final_volume -= final_volume.min()
-        final_volume /= final_volume.max()
+        final_volume = QuantileTransform()(final_volume)
         # final output needs to be in float32 or else torch throws mismatch error between this and weights tensor.
         final_volume = final_volume.to(torch.float32)
         vessel_labels_tensor[vessel_labels_tensor >= 1] = 1
@@ -388,41 +387,25 @@ class OctVolSynth(nn.Module):
         # Applying speckle noise model
         parenchyma = RandomGammaNoiseTransform(
             sigma=Uniform(self.speckle_a, self.speckle_b)
-            )(parenchyma)#[0]
-        #parenchyma -= parenchyma.min()
-        #parenchyma /= parenchyma.max()
-        # Applying z-stitch artifact
+            )(parenchyma)
+        parenchyma -= parenchyma.min()
+        parenchyma /= parenchyma.max()
         if self.synth_params == 'complex':
-            #balls1 = BernoulliDiskTransform(
-            #    prob=1e-3,
-            #    radius=random.randint(2, 10),
-            #    value=random.uniform(0.01, 1.99)
-            #    )(parenchyma)[0]
-            
-            #balls2 = BernoulliDiskTransform(
-            #    prob=5e-4,
-            #    radius=random.randint(2, 10),
-            #    value=random.uniform(0.01, 1.99),
-            #)(parenchyma)[0]
-
-            #balls = balls1 + balls2
-            
-            #balls = ElasticTransform(shape=10)(balls)
-            #parenchyma *= balls
+            # Applying z-stitch artifact
             parenchyma = RandomSlicewiseMulFieldTransform(
                 thickness=self.thickness_
                 )(parenchyma)
-            #parenchyma -= parenchyma.min()
-            #parenchyma /= parenchyma.max()
-            
+            parenchyma -= parenchyma.min()
+            parenchyma /= parenchyma.max()
         elif self.synth_params == 'simple':
+            # Give bias field in lieu of slicewise transform
             parenchyma = RandomMulFieldTransform(5)(parenchyma)
-            #parenchyma -= parenchyma.min()
-            #parenchyma /= parenchyma.max()
+            parenchyma -= parenchyma.min()
+            parenchyma /= parenchyma.max()
         parenchyma = RandomGammaTransform((self.gamma_a, self.gamma_b))(parenchyma)
-
         parenchyma -= parenchyma.min()
         parenchyma /= parenchyma.max()
+        volume_info(parenchyma)
         return parenchyma
     
 

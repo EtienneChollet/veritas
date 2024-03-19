@@ -226,10 +226,10 @@ def volume_info(tensor, name=None, n:int=150, stats:bool=True, zero=False, uniqu
         print(f"  StDev: {tensor.std().item():.1e}")
         print(f"  Range: [{tensor.min().item():.1e}, {tensor.max().item():.1e}]")
         # Quantiles
-        #print("2nd Percentile:", round(torch.quantile(tensor, 0.02).item(), 3))
-        #print("25th Percentile:", round(torch.quantile(tensor, 0.25).item(), 3))
-        #print("75th Percentile:", round(torch.quantile(tensor, 0.75).item(), 3))
-        #print("98th Percentile:", round(torch.quantile(tensor, 0.98).item(), 3))
+        print("2nd Percentile:", round(torch.quantile(tensor, 0.02).item(), 3))
+        print("25th Percentile:", round(torch.quantile(tensor, 0.25).item(), 3))
+        print("75th Percentile:", round(torch.quantile(tensor, 0.75).item(), 3))
+        print("98th Percentile:", round(torch.quantile(tensor, 0.98).item(), 3))
 
     #img = tensor.to('cpu').numpy().squeeze()
     #if a is None:
