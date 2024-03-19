@@ -13,7 +13,7 @@ if __name__ == "__main__":
 
     # New unet
     unet = Unet(
-        version_n=55,
+        version_n=1,
         synth_params='complex',
         model_dir='models',
         learning_rate=1e-4
@@ -34,7 +34,7 @@ if __name__ == "__main__":
     #unet.load(type='last')
 
     # exp 0001 has 368 labels
-    n_train = 365 #1000
+    n_train = 1000
     n_steps = 1e5
     n_gpus = 1
     accum_grad = 1

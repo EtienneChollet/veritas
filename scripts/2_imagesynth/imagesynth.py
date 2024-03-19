@@ -8,5 +8,5 @@ if __name__ == "__main__":
         synth_params='complex'
         )
     
-    for i in range(20):
+    for i in range(10):
         synth.__getitem__(i, save_nifti=True, make_fig=True, save_fig=True)

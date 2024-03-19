@@ -378,13 +378,19 @@ class OctVolSynth(nn.Module):
             shape=random.randint(2, self.shape_),
             )(vessel_labels_tensor) + 1
         parenchyma = RandomGaussianMixtureTransform(dtype=self.dtype)(parenchyma)
+        # Normalizing output of GMM as per good practice
         parenchyma -= parenchyma.min()
         parenchyma /= parenchyma.max()
-
+        # Rescaling parenchyma to avoid extremely low intensites
+        lower_bound = random.uniform(0, 0.7)
+        parenchyma += lower_bound
+        parenchyma /= parenchyma.max()
         # Applying speckle noise model
         parenchyma = RandomGammaNoiseTransform(
             sigma=Uniform(self.speckle_a, self.speckle_b)
             )(parenchyma)#[0]
+        #parenchyma -= parenchyma.min()
+        #parenchyma /= parenchyma.max()
         # Applying z-stitch artifact
         if self.synth_params == 'complex':
             #balls1 = BernoulliDiskTransform(
@@ -406,9 +412,13 @@ class OctVolSynth(nn.Module):
             parenchyma = RandomSlicewiseMulFieldTransform(
                 thickness=self.thickness_
                 )(parenchyma)
+            #parenchyma -= parenchyma.min()
+            #parenchyma /= parenchyma.max()
             
         elif self.synth_params == 'simple':
             parenchyma = RandomMulFieldTransform(5)(parenchyma)
+            #parenchyma -= parenchyma.min()
+            #parenchyma /= parenchyma.max()
         parenchyma = RandomGammaTransform((self.gamma_a, self.gamma_b))(parenchyma)
 
         parenchyma -= parenchyma.min()
@@ -480,5 +490,5 @@ class OctVolSynth(nn.Module):
         # Scaling tensor intensities between [0.75, ~1]
         #vessel_texture /= 4
         #vessel_texture -= 1
-        vessel_texture.abs_()
+        #vessel_texture.abs_()
         return vessel_texture
