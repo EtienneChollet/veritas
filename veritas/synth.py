@@ -345,11 +345,11 @@ class OctVolSynth(nn.Module):
         elif self.n_unique_ids >= 1:
             # synthesize vessels (grouped by intensity)
             vessels = self.vessels_(vessel_labels_tensor) 
+            vessels[vessels == 0] = 1
             if self.synth_params == 'complex':
                 # Create a parenchyma-like mask to texturize vessels
                 vessel_texture = self.vessel_texture_(vessel_labels_tensor)
-            vessels[vessels == 0] = 1
-            vessels = torch.mul(vessels, vessel_texture)
+                vessels = torch.mul(vessels, vessel_texture)
             final_volume = torch.mul(parenchyma, vessels)
         # Normalizing
         final_volume = QuantileTransform()(final_volume)
@@ -405,7 +405,7 @@ class OctVolSynth(nn.Module):
         parenchyma = RandomGammaTransform((self.gamma_a, self.gamma_b))(parenchyma)
         parenchyma -= parenchyma.min()
         parenchyma /= parenchyma.max()
-        volume_info(parenchyma)
+        #volume_info(parenchyma)
         return parenchyma
     
 
