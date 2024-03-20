@@ -330,7 +330,7 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
             patch = patch.to('cuda')
         patch = patch.unsqueeze(0).unsqueeze(0)
         if self.normalize_patches == True:
-            patch = QuantileTransform(pmin=0.02, pmax=0.98, vmin=0, vmax=1)(patch)
+            patch = QuantileTransform()(patch)
         prediction = self.trainee(patch).to(self.device)
         prediction = torch.sigmoid(prediction).squeeze()
         #prediction = torch.ones((64, 64, 64)).to('cuda')

@@ -9,12 +9,12 @@ import os
 
 if __name__ == "__main__":
 
-    data_experiment_number = 1
+    data_experiment_number = 2
 
     # New unet
     unet = Unet(
-        version_n=1,
-        synth_params='complex',
+        version_n=4,
+        synth_params='simple',
         model_dir='models',
         learning_rate=1e-4
         )
