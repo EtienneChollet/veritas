@@ -16,6 +16,8 @@ if __name__ == "__main__":
                         help='size of UNet (and size of sliding prediction patch)')
     parser.add_argument('--step-size', type=int, default=64,
                         help='step size (in vx) between adjacent prediction patches.')
+    parser.add_argument('--checkpoint', type=str, default='best',
+                        help='Checkpoint to load. "best" or "last".')
     
     args = parser.parse_args()
     versions = args.version
@@ -23,6 +25,7 @@ if __name__ == "__main__":
     volume = args.volume
     patch_size = args.patch_size
     step_size = args.step_size
+    checkpoint = args.checkpoint
 
     #volume = '/autofs/cluster/octdata2/users/epc28/data/caroline_data/I46_Somatosensory_20um_crop.nii'
     #volume = '/autofs/cluster/octdata2/users/epc28/data/CAA/caa17/occipital/caa17_occipital.nii'
@@ -38,7 +41,7 @@ if __name__ == "__main__":
                 device='cuda'
                 )
             
-            unet.load(type='best', mode='test')
+            unet.load(type=checkpoint, mode='test')
 
             prediction = veritas.RealOctPredict(
                 input=volume,
@@ -47,7 +50,7 @@ if __name__ == "__main__":
                 device='cuda',
                 patch_size=patch_size,
                 step_size=step_size,
-                normalize=True,
+                normalize=False,
                 pad_it=True,
                 padding_method='reflect',
                 normalize_patches=True,

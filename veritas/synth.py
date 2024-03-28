@@ -276,6 +276,7 @@ class VascularNetworkDataset(Dataset):
 
     def __getitem__(self, idx):
         label = nib.load(self.inputs[idx]).get_fdata()
+        #label = torch.from_numpy(label)
         label = np.clip(label, 0, 127).astype(np.int8)[None]
         return label
 
@@ -470,8 +471,4 @@ class OctVolSynth(nn.Module):
         vessel_texture -= vessel_texture.min()
         vessel_texture /= vessel_texture.max()
         vessel_texture.clamp_min_(1e-1)
-        # Scaling tensor intensities between [0.75, ~1]
-        #vessel_texture /= 4
-        #vessel_texture -= 1
-        #vessel_texture.abs_()
         return vessel_texture

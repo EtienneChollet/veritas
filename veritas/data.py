@@ -323,17 +323,19 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
         ----------
         idx : int
             Patch ID number to predict on. Updates self.imprint_tensor.
-        """     
+        """
         patch, coords = super().__getitem__(idx)
         ## Needs to go on cuda for prediction
         if self.device != 'cuda':
             patch = patch.to('cuda')
         patch = patch.unsqueeze(0).unsqueeze(0)
         if self.normalize_patches == True:
+            #patch -= patch.min()
+            #patch /= patch.max()
             patch = QuantileTransform()(patch)
         prediction = self.trainee(patch).to(self.device)
         prediction = torch.sigmoid(prediction).squeeze()
-        #prediction = torch.ones((64, 64, 64)).to('cuda')
+        #prediction = torch.ones(patch.shape).to('cuda')
         self.imprint_tensor[coords[0], coords[1], coords[2]] += (prediction * self.patch_weight)
 
     def predict_on_all(self):

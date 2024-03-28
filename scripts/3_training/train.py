@@ -7,16 +7,28 @@ import os
 #torch.set_float32_matmul_precision('medium')
 #os.environ['CUDA_VISIBLE_DEVICES']='0'
 
-if __name__ == "__main__":
 
-    data_experiment_number = 2
+if __name__ == "__main__":
+    #torch.set_float32_matmul_precision('medium')
+
+    ##################
+    version_n = 6
+    data_params = 'complex'
+    synth_params = 'complex'
+    ##################
+
+    data_params_dict = {'complex': 1,
+                        'simple': 2}
+    #data_experiment_number = data_params_dict[data_params]
+    data_experiment_number = 4
+    print(f'Using data from experiment {data_experiment_number}')
 
     # New unet
     unet = Unet(
-        version_n=4,
-        synth_params='simple',
+        version_n=version_n,
+        synth_params=synth_params,
         model_dir='models',
-        learning_rate=1e-4
+        learning_rate=1e-2#1e-4,
         )
     
     unet.new(
@@ -33,8 +45,9 @@ if __name__ == "__main__":
     #    )
     #unet.load(type='last')
 
-    # exp 0001 has 368 labels
-    n_train = 1000
+    # exp0001 has 368 labels
+    # exp0003 has 270 labels
+    n_train = 25
     n_steps = 1e5
     n_gpus = 1
     accum_grad = 1
@@ -49,5 +62,6 @@ if __name__ == "__main__":
         batch_size=batch_size,
         accumulate_gradient_n_batches=accum_grad,
         subset=n_train,
-        num_workers=3
+        num_workers=4, #3
+        train_to_val=0.8
     )

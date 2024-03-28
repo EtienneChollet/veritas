@@ -58,13 +58,13 @@ class Unet(object):
         self.learning_rate=learning_rate
 
 
-    def load(self, backbone_dict=None, type='last', mode='train'):
+    def load(self, backbone_dict=None, type='best', mode='train'):
         """
         Load a unet from checkpoint
 
         Parameters
         ----------
-        type : {'last', 'best'}
+        type : {'best', 'last'}
             Which checkpoint to load from version directory.
         mode : {'train', 'test'}
             Whether model will be used for training or testing purposes.
@@ -107,6 +107,9 @@ class Unet(object):
                         trainee=trainee,
                         loss=self.losses
                         )
+                else:
+                    print('Not a valid checkpoint')
+                    exit(0)
             else:
                 trainee = train.FineTunedTrainee(
                     trainee=trainee,
@@ -121,15 +124,10 @@ class Unet(object):
                 lr=self.learning_rate
                 )
             trainee = train.FineTunedTrainee.load_from_checkpoint(
-                checkpoint_path=Checkpoint(self.checkpoint_dir).last(),
+                checkpoint_path=Checkpoint(self.checkpoint_dir).best(),
                 trainee=trainee,
                 loss=self.losses
             )
-            #trainee = train.FineTunedTrainee.load_from_checkpoint(
-            #    checkpoint_path=Checkpoint(self.checkpoint_dir).last(),
-            #    trainee=trainee,
-            #    loss=self.losses
-            #    )
         self.trainee = trainee.to(self.device)
         return trainee
     
@@ -159,7 +157,8 @@ class Unet(object):
             "nb_conv": nb_conv,
             "kernel_size": kernel_size,
             "activation": activation,
-            "norm": norm
+            "norm": norm,
+            "residual":True
             }
         PathTools(self.version_path).makeDir()
         JsonTools(self.json_path).log(backbone_dict)  
