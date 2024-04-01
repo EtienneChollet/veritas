@@ -1,5 +1,5 @@
 {
-"n_volumes": 100,
+"n_volumes": 1000,
 "begin_at_volume_n": 0,
 "shape": 128,
 "voxel_size": 0.02,

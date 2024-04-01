@@ -307,13 +307,13 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
             self.tensor.shape, device=self.device, dtype=self.dtype
             )
         self.normalize_patches=normalize_patches
-        # Increasing "scale" will give less weight to the ends of the patch.
-        scale = 2/5
-        min = torch.pi * scale
-        max = ((1/scale) - 1) * (torch.pi * scale)
         self.backend = dict(dtype=self.dtype, device=self.device)
-        patch_dim_weight = torch.linspace(min, max, self.patch_size, **self.backend).sin()
-        self.patch_weight = patch_dim_weight[:, None, None] * patch_dim_weight[None, :, None] * patch_dim_weight[None, None, :]
+        # The edges of the kernel will be, at most, multiplied by min_scale
+        # No weight = 3/2, zeros = 0
+        min_scale = 3/2
+        half_filter_1d = torch.linspace(min_scale, torch.pi/2, self.patch_size//2, **self.backend).sin()
+        filter_1d = torch.concat([half_filter_1d, half_filter_1d.flip(0)])
+        self.patch_weight = filter_1d[:, None, None] * filter_1d[None, :, None] * filter_1d[None, None, :]
 
     def __getitem__(self, idx:int):
         """
@@ -330,9 +330,8 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
             patch = patch.to('cuda')
         patch = patch.unsqueeze(0).unsqueeze(0)
         if self.normalize_patches == True:
-            #patch -= patch.min()
-            #patch /= patch.max()
             patch = QuantileTransform()(patch)
+            pass
         prediction = self.trainee(patch).to(self.device)
         prediction = torch.sigmoid(prediction).squeeze()
         #prediction = torch.ones(patch.shape).to('cuda')

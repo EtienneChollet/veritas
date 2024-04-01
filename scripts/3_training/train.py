@@ -28,7 +28,7 @@ if __name__ == "__main__":
         version_n=version_n,
         synth_params=synth_params,
         model_dir='models',
-        learning_rate=1e-2#1e-4,
+        learning_rate=1e-2 #1e-4,
         )
     
     unet.new(
@@ -47,12 +47,14 @@ if __name__ == "__main__":
 
     # exp0001 has 368 labels
     # exp0003 has 270 labels
-    n_train = 25
+    n_vol = 10
+    train_to_val = 0.8
     n_steps = 1e5
     n_gpus = 1
     accum_grad = 1
     batch_size = 1
 
+    n_train = n_vol*train_to_val
     batch_sz_eff = batch_size * n_gpus * accum_grad
     epochs = int((n_steps * batch_sz_eff) // n_train)
     print(f'Training for {epochs} epochs')
@@ -61,7 +63,7 @@ if __name__ == "__main__":
         epochs=epochs,
         batch_size=batch_size,
         accumulate_gradient_n_batches=accum_grad,
-        subset=n_train,
-        num_workers=4, #3
-        train_to_val=0.8
+        subset=n_vol,
+        num_workers=3,
+        train_to_val=train_to_val
     )

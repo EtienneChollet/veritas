@@ -12,6 +12,7 @@ from torch import nn
 import math as pymath
 import nibabel as nib
 import random
+from torchvision.transforms import GaussianBlur
 
 # Custom Imports
 from veritas.utils import PathTools, JsonTools, volume_info
@@ -346,12 +347,15 @@ class OctVolSynth(nn.Module):
         elif self.n_unique_ids >= 1:
             # synthesize vessels (grouped by intensity)
             vessels = self.vessels_(vessel_labels_tensor) 
-            vessels[vessels == 0] = 1
+            #vessels[vessels == 0] = 1
             if self.synth_params == 'complex':
                 # Create a parenchyma-like mask to texturize vessels
                 vessel_texture = self.vessel_texture_(vessel_labels_tensor)
-                vessels = torch.mul(vessels, vessel_texture)
-            final_volume = torch.mul(parenchyma, vessels)
+                vessels[vessel_labels_tensor > 0] *= vessel_texture[vessel_labels_tensor > 0]
+            final_volume = parenchyma
+            blurred_volume = parenchyma#GaussianBlur(kernel_size=25, sigma=10)(parenchyma)
+            blurred_volume[vessel_labels_tensor > 0] *= vessels[vessel_labels_tensor > 0]
+            final_volume[vessel_labels_tensor > 0] = blurred_volume[vessel_labels_tensor > 0]            
         # Normalizing
         final_volume = QuantileTransform()(final_volume)
         # final output needs to be in float32 or else torch throws mismatch error between this and weights tensor.
@@ -377,32 +381,45 @@ class OctVolSynth(nn.Module):
             nb_classes=random.randint(2, self.nb_classes_),
             shape=random.randint(2, self.shape_),
             )(vessel_labels_tensor) + 1
-        parenchyma = RandomGaussianMixtureTransform(dtype=self.dtype)(parenchyma)
-        # Normalizing output of GMM as per good practice
-        parenchyma -= parenchyma.min()
+        # Randomly assigning intensities to parenchyma
+        parenchyma = parenchyma.to(torch.float32)
+        for i in torch.unique(parenchyma):
+            parenchyma.masked_fill_(parenchyma==i, random.gauss(i,0.2))
         parenchyma /= parenchyma.max()
         # Rescaling parenchyma to avoid extremely low intensites
-        lower_bound = random.uniform(0, 0.7)
-        parenchyma += lower_bound
-        parenchyma /= parenchyma.max()
+        #lower_bound = random.uniform(0, 0.1)
+        #parenchyma += lower_bound
         # Applying speckle noise model
         parenchyma = RandomGammaNoiseTransform(
             sigma=Uniform(self.speckle_a, self.speckle_b)
             )(parenchyma)
-        parenchyma -= parenchyma.min()
-        parenchyma /= parenchyma.max()
         if self.synth_params == 'complex':
-            # Applying z-stitch artifact
+            if random.uniform(0, 1) == 1:
+                balls1 = BernoulliDiskTransform(
+                    prob=1e-3,
+                    radius=random.randint(1, 4),
+                    value=random.uniform(0, 2)
+                    )(parenchyma)[0]
+                balls2 = BernoulliDiskTransform(
+                    prob=5e-4,
+                    radius=random.randint(1, 3),
+                    value=random.uniform(0, 2),
+                )(parenchyma)[0]
+                balls = balls1 + balls2
+                if random.randint(0, 2) == 2:
+                    balls = ElasticTransform(shape=5)(balls).detach()
+                parenchyma *= balls
+                # Applying z-stitch artifact
             parenchyma = RandomSlicewiseMulFieldTransform(
                 thickness=self.thickness_
                 )(parenchyma)
-            parenchyma -= parenchyma.min()
-            parenchyma /= parenchyma.max()
+            #parenchyma -= parenchyma.min()
+            #parenchyma /= parenchyma.max()
         elif self.synth_params == 'simple':
             # Give bias field in lieu of slicewise transform
             parenchyma = RandomMulFieldTransform(5)(parenchyma)
-            parenchyma -= parenchyma.min()
-            parenchyma /= parenchyma.max()
+            #parenchyma -= parenchyma.min()
+            #parenchyma /= parenchyma.max()
         parenchyma = RandomGammaTransform((self.gamma_a, self.gamma_b))(parenchyma)
         parenchyma -= parenchyma.min()
         parenchyma /= parenchyma.max()
@@ -423,23 +440,17 @@ class OctVolSynth(nn.Module):
         max_i : float
             Maximum intensity of vessels compared to background
         """
-        # Need to put this guy on CPU before mask fill operation.
         # Generate an empty tensor that we will fill with vessels and their
         # scaling factors to imprint or "stamp" onto parenchymal volume
         scaling_tensor = torch.zeros(
             vessel_labels_tensor.shape,
             dtype=self.dtype,
             device=vessel_labels_tensor.device)
-        # Calculate the number of elements (vessels) in each intensity group
         # Iterate through each vessel group based on their unique intensity
-        for int_n in range(self.n_unique_ids):
-            # Assign intensity for this group from uniform distro
+        vessel_labels_left = torch.unique(vessel_labels_tensor)
+        for int_n in vessel_labels_left:
             intensity = Uniform(self.i_min, self.i_max)()
-            # Get label ID's of all vessels that will be assigned to this intensity
-            vessel_labels_at_i = self.vessel_labels[int_n : int_n + 1]
-            # Fill the empty tensor with the vessel scaling factors
-            for ves_n in vessel_labels_at_i:
-                scaling_tensor.masked_fill_(vessel_labels_tensor == ves_n, intensity)    
+            scaling_tensor.masked_fill_(vessel_labels_tensor == int_n, intensity)    
         return scaling_tensor
     
 
@@ -458,17 +469,20 @@ class OctVolSynth(nn.Module):
         
         # Create the label map of parenchyma but convert to float32 for further computations
         # Add 1 so that we can work with every single pixel (no zeros)
-        nb_classes = RandInt(2, self.nb_classes_)()
+        #nb_classes = RandInt(2, self.nb_classes_)()
         vessel_texture = RandomSmoothLabelMap(
-            nb_classes=Fixed(nb_classes),
+            nb_classes=Fixed(2),
             shape=self.shape_,
             )(vessel_labels_tensor) + 1
         # Applying gaussian mixture
         vessel_texture = RandomGaussianMixtureTransform(
+            mu=random.uniform(0.7, 1),
+            sigma=0.8,
             dtype=self.dtype
             )(vessel_texture)
         # Normalizing and clamping min
         vessel_texture -= vessel_texture.min()
-        vessel_texture /= vessel_texture.max()
-        vessel_texture.clamp_min_(1e-1)
+        vessel_texture /= (vessel_texture.max()*2)
+        vessel_texture += 0.5
+        #vessel_texture.clamp_min_(1e-2)
         return vessel_texture
