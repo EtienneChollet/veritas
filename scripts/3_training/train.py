@@ -4,15 +4,9 @@ import torch
 from veritas.models import Unet
 import os
 
-#torch.set_float32_matmul_precision('medium')
-#os.environ['CUDA_VISIBLE_DEVICES']='0'
-
-
 if __name__ == "__main__":
-    #torch.set_float32_matmul_precision('medium')
-
     ##################
-    version_n = 6
+    version_n = 9999
     data_params = 'complex'
     synth_params = 'complex'
     ##################
@@ -20,7 +14,7 @@ if __name__ == "__main__":
     data_params_dict = {'complex': 1,
                         'simple': 2}
     #data_experiment_number = data_params_dict[data_params]
-    data_experiment_number = 4
+    data_experiment_number = 6
     print(f'Using data from experiment {data_experiment_number}')
 
     # New unet
@@ -47,7 +41,7 @@ if __name__ == "__main__":
 
     # exp0001 has 368 labels
     # exp0003 has 270 labels
-    n_vol = 10
+    n_vol = 1000
     train_to_val = 0.8
     n_steps = 1e5
     n_gpus = 1

@@ -8,6 +8,8 @@ import os
 import sys
 import time
 import torch
+import skimage
+import sklearn
 import random
 import numpy as np
 import nibabel as nib
@@ -89,6 +91,7 @@ class RealOct(object):
             normalize=self.normalize,
             pad_it=self.pad_it
             )
+        self.shape = self.tensor.shape
         #self.mask_tensor, self.mask_nifti, self.mask_affine = self.load_tensor(mask)
         
     def load_tensor(
@@ -158,6 +161,28 @@ class RealOct(object):
         )[0]
         #volume_info(tensor, 'Padded')
         return tensor
+    
+    def make_mask(self, n_clusters=3):
+        backend = dict(dtype=self.tensor.dtype, device=self.tensor.device)
+        
+        preprocessed_vol = skimage.filters.gaussian(self.tensor, 10)
+        preprocessed_vol = preprocessed_vol.reshape(-1, 1)
+        kmeans = sklearn.cluster.KMeans(n_clusters=n_clusters)
+        means = kmeans.fit(preprocessed_vol)
+        segmented_vol = kmeans.cluster_centers_[kmeans.labels_]
+
+        segmented_vol = torch.from_numpy(segmented_vol.reshape(self.shape))
+        labelmask = torch.from_numpy(kmeans.labels_.reshape(self.shape))
+
+        means = torch.unique(segmented_vol)
+        labels = torch.unique(labelmask)
+
+        for i in range(len(means)):
+            segmented_vol[segmented_vol == means[i]] = labels[i]
+        
+        return segmented_vol.to(torch.int16).numpy()
+
+
         
 
 
@@ -310,7 +335,7 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
         self.backend = dict(dtype=self.dtype, device=self.device)
         # The edges of the kernel will be, at most, multiplied by min_scale
         # No weight = 3/2, zeros = 0
-        min_scale = 3/2
+        min_scale = 1/2
         half_filter_1d = torch.linspace(min_scale, torch.pi/2, self.patch_size//2, **self.backend).sin()
         filter_1d = torch.concat([half_filter_1d, half_filter_1d.flip(0)])
         self.patch_weight = filter_1d[:, None, None] * filter_1d[None, :, None] * filter_1d[None, None, :]
@@ -325,16 +350,15 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
             Patch ID number to predict on. Updates self.imprint_tensor.
         """
         patch, coords = super().__getitem__(idx)
-        ## Needs to go on cuda for prediction
+        ## Needs to go on cuda for prediction. Useful when predicting on large
+        ## volumes that are on CPU.
         if self.device != 'cuda':
             patch = patch.to('cuda')
         patch = patch.unsqueeze(0).unsqueeze(0)
         if self.normalize_patches == True:
             patch = QuantileTransform()(patch)
-            pass
-        prediction = self.trainee(patch).to(self.device)
+        prediction = self.trainee(patch)
         prediction = torch.sigmoid(prediction).squeeze()
-        #prediction = torch.ones(patch.shape).to('cuda')
         self.imprint_tensor[coords[0], coords[1], coords[2]] += (prediction * self.patch_weight)
 
     def predict_on_all(self):
@@ -344,13 +368,14 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
         n_patches = len(self)
         t0 = time.time()
         print('Starting predictions!!')
-        for i in range(n_patches):
-            self[i]
-            if (i+1) % 10 == 0:
-                total_elapsed_time = time.time() - t0
-                average_time_per_pred = round(total_elapsed_time / (i+1), 3)
-                sys.stdout.write(f"\rPrediction {i + 1}/{n_patches} | {average_time_per_pred} sec/pred | {round(average_time_per_pred * n_patches / 60, 2)} min total pred time")
-                sys.stdout.flush()
+        with torch.no_grad():            
+            for i in range(n_patches):
+                self[i]
+                if (i+1) % 10 == 0:
+                    total_elapsed_time = time.time() - t0
+                    average_time_per_pred = round(total_elapsed_time / (i+1), 3)
+                    sys.stdout.write(f"\rPrediction {i + 1}/{n_patches} | {average_time_per_pred} sec/pred | {round(average_time_per_pred * n_patches / 60, 2)} min total pred time")
+                    sys.stdout.flush()
 
         # Remove padding
         s = slice(self.patch_size, -self.patch_size)

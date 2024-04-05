@@ -5,7 +5,6 @@ import argparse
 
 
 if __name__ == "__main__":   
-
     parser = argparse.ArgumentParser(description='Test UNet model that has been trained in default models dir.')
 
     parser.add_argument('--version', type=str, default=1,

@@ -3,9 +3,9 @@
         "nb_classes": 2,
         "shape": 5
     },
-    "gamma": [0.5, 1.5],
+    "gamma": [0.75, 1.25],
     "z_decay": [32],
-    "speckle": [0.1, 0.4],
+    "speckle": [0.1, 0.11],
     "imax": 0.5,
     "imin": 0.0001
 }

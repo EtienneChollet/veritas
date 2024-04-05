@@ -90,6 +90,9 @@ if __name__ == '__main__':
     print(f'Dice V8: {round(dice_v8, 3)}')
     out_vol = tp + fp + fn
 
+    print(f'{round(dice_gt, 3)}\n{round(dice_v8, 3)}')
+
+    #print(f'{round(dice_gt, 3)},{round(dice_v8, 3)}')
     confusion_v8_out = f'/autofs/cluster/octdata2/users/epc28/veritas/output/models/version_{version}/predictions/v{version}-confusion_v8.nii.gz'
     out_nifti = nib.nifti1.Nifti1Image(dataobj=out_vol, affine=affine)
     nib.save(out_nifti, confusion_v8_out)

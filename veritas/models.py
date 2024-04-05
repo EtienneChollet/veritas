@@ -18,6 +18,8 @@ from veritas.synth import OctVolSynth, VascularNetworkDataset
 # Eti's superstition
 #torch.no_grad()
 
+from pytorch_lightning.callbacks import LearningRateMonitor
+
 class Unet(object):
     """
     Base class for UNet.
@@ -241,7 +243,7 @@ class Unet(object):
             check_val_every_n_epoch=self.check_val_every_n_epoch,
             accumulate_grad_batches=self.accumulate_gradient_n_batches,
             logger=self.logger,
-            callbacks=[self.checkpoint_callback],
+            callbacks=[self.checkpoint_callback, LearningRateMonitor(logging_interval='step')],
             max_epochs=self.epochs,
             #gradient_clip_val=0.5,
             #gradient_clip_algorithm='value'
