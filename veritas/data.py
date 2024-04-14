@@ -3,6 +3,7 @@ __all__ = [
     'RealOctPatchLoader',
     'RealOctPredict'
 ]
+
 # Standard imports
 import os
 import sys
@@ -10,6 +11,7 @@ import time
 import torch
 import skimage
 import sklearn
+from sklearn.cluster import KMeans
 import random
 import numpy as np
 import nibabel as nib
@@ -56,7 +58,7 @@ class RealOct(object):
             Threshold at which to binarize (must be used with binarized=True)
         normalize: bool
             Whether to normalize tensor.
-        pad_ : bool
+        pad_it : bool
             If tensor should be padded.
         padding_method: {'replicate', 'reflect', 'constant'}
             How to pad tensor.
@@ -115,7 +117,7 @@ class RealOct(object):
             # Getting name of volume (will be used later for saving prediction)
             self.tensor_name = input.split('/')[-1].strip('.nii')
             # Get directory location of volume (will also use later for saving)
-            self.volume_dir = self.input.strip('.nii').strip(self.tensor_name).strip('/')
+            self.volume_dir = f"/{self.input.strip('.nii').strip(self.tensor_name).strip('/')}"
             nifti = nib.load(input)
             # Load tensor on device with dtype. Detach from graph.
             tensor = nifti.get_fdata()
@@ -162,27 +164,91 @@ class RealOct(object):
         #volume_info(tensor, 'Padded')
         return tensor
     
-    def make_mask(self, n_clusters=3):
-        backend = dict(dtype=self.tensor.dtype, device=self.tensor.device)
-        
-        preprocessed_vol = skimage.filters.gaussian(self.tensor, 10)
-        preprocessed_vol = preprocessed_vol.reshape(-1, 1)
-        kmeans = sklearn.cluster.KMeans(n_clusters=n_clusters)
-        means = kmeans.fit(preprocessed_vol)
-        segmented_vol = kmeans.cluster_centers_[kmeans.labels_]
+    
+    def make_mask(self, n_clusters=3, mode='seperate'):
+        """
+        Make tissue masks
 
+        n_clusters : int
+            Number of unique intensity values to extract
+        mode : {'seperate', 'unified'}
+            Which masks to return. 'seperate' returns tissue mask, wm mask,
+            and gm mask. Unified returns all 3.
+        """
+
+        backend = dict(dtype=self.tensor.dtype, device=self.tensor.device)
+        # Smoothing data with gaussian filter
+        preprocessed_vol = skimage.filters.gaussian(self.tensor, 10)
+        # Reshaping to 1d
+        preprocessed_vol = preprocessed_vol.reshape(-1, 1)
+        # instantiating kmeans clustering
+        kmeans = sklearn.cluster.KMeans(n_clusters=n_clusters)
+        # applying kmeans to 1d tensor
+        means = kmeans.fit(preprocessed_vol)
+        # getting volume labeled by class type
+        segmented_vol = kmeans.cluster_centers_[kmeans.labels_]
+        # reshaping to 3d and passing volumes to torch
         segmented_vol = torch.from_numpy(segmented_vol.reshape(self.shape))
         labelmask = torch.from_numpy(kmeans.labels_.reshape(self.shape))
-
+        # getting unique labels
         means = torch.unique(segmented_vol)
         labels = torch.unique(labelmask)
-
+        # renumbering floats of mean values to semantic labels
         for i in range(len(means)):
             segmented_vol[segmented_vol == means[i]] = labels[i]
-        
-        return segmented_vol.to(torch.int16).numpy()
+        # converting to int16
+        segmented_vol = segmented_vol.to(torch.int16).numpy()
+
+        def seperate_masks(mask):
+            """
+            Makes sense of kmeans tissue mask.
+            """
+            tissue_mask = np.copy(mask)
+            tissue_mask += 1
+            tissue_mask[tissue_mask > 1] = 0
+            tissue_mask = 1 - tissue_mask
+
+            gm_mask = np.copy(mask)
+            gm_mask[gm_mask != 1] = 0
+
+            wm_mask = np.copy(mask)
+            wm_mask[wm_mask != 2] = 0
+            wm_mask[wm_mask == 2] = 1
 
 
+            return tissue_mask, gm_mask, wm_mask
+
+        if mode == 'seperate':
+            return seperate_masks(segmented_vol)
+        elif mode == 'unified':
+            return segmented_vol
+        else:
+            print("I don't know what kind of mask you want!")
+
+    def get_mask(self, mask_type='tissue-mask'):
+        """"
+        Load mask. Makes mask if does not exist in filesystem.
+
+        Parameters
+        ----------
+        mask_type : {'tissue-mask', 'gm-mask', 'wm-mask'}
+            Type of mask to load.
+        """
+        mask_types = ['tissue-mask', 'gm-mask', 'wm-mask']
+        if mask_type not in mask_types:
+            print('Invalid mask type!')
+            exit(0)
+        mask_path = f"{self.volume_dir}/kmeans-{mask_type}.nii"
+
+        if os.path.exists(mask_path):
+            mask = nib.load(mask_path)
+            return mask
+        else:
+            masks = self.make_mask()
+            for i in range(len(mask_types)):
+                nifti = nib.nifti1.Nifti1Image(masks[i], affine=self.affine)
+                nib.save(nifti, f'{self.volume_dir}/kmeans-{mask_types[i]}.nii')
+            return masks[mask_types.index(mask_type)]
         
 
 
@@ -327,18 +393,17 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
 
     def __init__(self, trainee=None, normalize_patches=True, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.trainee = trainee
-        self.imprint_tensor = torch.zeros(
-            self.tensor.shape, device=self.device, dtype=self.dtype
-            )
-        self.normalize_patches=normalize_patches
         self.backend = dict(dtype=self.dtype, device=self.device)
+        self.trainee = trainee
+        self.imprint_tensor = torch.zeros(self.tensor.shape, **self.backend)
+        self.normalize_patches=normalize_patches
         # The edges of the kernel will be, at most, multiplied by min_scale
         # No weight = 3/2, zeros = 0
-        min_scale = 1/2
+        min_scale = 1/2 #1/2
         half_filter_1d = torch.linspace(min_scale, torch.pi/2, self.patch_size//2, **self.backend).sin()
         filter_1d = torch.concat([half_filter_1d, half_filter_1d.flip(0)])
         self.patch_weight = filter_1d[:, None, None] * filter_1d[None, :, None] * filter_1d[None, None, :]
+        self.patch_weight = self.patch_weight.to('cuda')
 
     def __getitem__(self, idx:int):
         """
@@ -356,10 +421,16 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
             patch = patch.to('cuda')
         patch = patch.unsqueeze(0).unsqueeze(0)
         if self.normalize_patches == True:
-            patch = QuantileTransform()(patch)
+            #patch -= patch.min()
+            #patch /= patch.max()
+            try:
+                patch = QuantileTransform()(patch)
+            except:
+                pass
         prediction = self.trainee(patch)
         prediction = torch.sigmoid(prediction).squeeze()
-        self.imprint_tensor[coords[0], coords[1], coords[2]] += (prediction * self.patch_weight)
+        weighted_prediction = (prediction * self.patch_weight).to(**self.backend)
+        self.imprint_tensor[coords[0], coords[1], coords[2]] += weighted_prediction
 
     def predict_on_all(self):
         if self.tensor.dtype != torch.float32:

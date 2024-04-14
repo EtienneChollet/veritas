@@ -341,6 +341,8 @@ class OctVolSynth(nn.Module):
                 vessel_labels_tensor[vessel_labels_tensor == id] = 0
 
         parenchyma = self.parenchyma_(vessel_labels_tensor)
+        #dc_offset = random.uniform(1e-2, 0.1)
+        #parenchyma += dc_offset
         # Determine if there are any vessels to deal with
         if self.n_unique_ids == 0:
             final_volume = parenchyma

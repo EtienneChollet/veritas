@@ -6,7 +6,7 @@ import os
 
 if __name__ == "__main__":
     ##################
-    version_n = 9999
+    version_n = 64
     data_params = 'complex'
     synth_params = 'complex'
     ##################
@@ -14,7 +14,7 @@ if __name__ == "__main__":
     data_params_dict = {'complex': 1,
                         'simple': 2}
     #data_experiment_number = data_params_dict[data_params]
-    data_experiment_number = 6
+    data_experiment_number = 4
     print(f'Using data from experiment {data_experiment_number}')
 
     # New unet
@@ -28,7 +28,7 @@ if __name__ == "__main__":
     unet.new(
         nb_levels=4,
         nb_features=[32, 64, 128, 256],
-        dropout=0)
+        dropout=0.5)
 
     # Load unet (retraining)
     #unet = Unet(
@@ -43,7 +43,7 @@ if __name__ == "__main__":
     # exp0003 has 270 labels
     n_vol = 1000
     train_to_val = 0.8
-    n_steps = 1e5
+    n_steps = 1e6
     n_gpus = 1
     accum_grad = 1
     batch_size = 1

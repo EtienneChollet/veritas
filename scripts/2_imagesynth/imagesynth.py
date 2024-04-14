@@ -9,7 +9,7 @@ if __name__ == "__main__":
         synth_params='complex',
         )
     t1 = time.time()
-    for i in range(5):
+    for i in range(10):
         synth.__getitem__(i, save_nifti=True, make_fig=False, save_fig=False)
     t2 = time.time()
     print(t2-t1)

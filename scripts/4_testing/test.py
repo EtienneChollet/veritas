@@ -11,9 +11,9 @@ if __name__ == "__main__":
                     help='model version to test (default: 1). can test many versions seperated by commas.')
     parser.add_argument('--volume', type=str, default='/autofs/cluster/octdata2/users/epc28/data/caroline_data/I46_Somatosensory_20um_crop.nii',
                         help='path to volume you want to predict on.')
-    parser.add_argument('--patch-size', type=int, default=256,
+    parser.add_argument('--patch-size', type=int, default=128,
                         help='size of UNet (and size of sliding prediction patch)')
-    parser.add_argument('--step-size', type=int, default=64,
+    parser.add_argument('--step-size', type=int, default=32,
                         help='step size (in vx) between adjacent prediction patches.')
     parser.add_argument('--checkpoint', type=str, default='best',
                         help='Checkpoint to load. "best" or "last".')
