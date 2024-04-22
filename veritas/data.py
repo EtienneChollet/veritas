@@ -11,6 +11,8 @@ import time
 import torch
 import skimage
 import sklearn
+import torchvision
+from scipy import ndimage
 from sklearn.cluster import KMeans
 import random
 import numpy as np
@@ -120,8 +122,8 @@ class RealOct(object):
             self.volume_dir = f"/{self.input.strip('.nii').strip(self.tensor_name).strip('/')}"
             nifti = nib.load(input)
             # Load tensor on device with dtype. Detach from graph.
-            tensor = nifti.get_fdata()
             affine = nifti.affine
+            tensor = nifti.get_fdata()
         elif isinstance(input, torch.Tensor):
             tensor = input.to(self.device).to(self.dtype).detach()
             nifti = None
@@ -129,7 +131,7 @@ class RealOct(object):
         if normalize == True:
             tensor = self.normalize_volume(tensor)
         # Needs to be a tensor for padding operations
-        tensor = torch.as_tensor(tensor, device=self.device).detach()
+        tensor = torch.from_numpy(tensor).to(self.device).detach()
         if pad_it == True:
             tensor = self.pad_volume(tensor)
         if self.binarize == True:
@@ -165,7 +167,7 @@ class RealOct(object):
         return tensor
     
     
-    def make_mask(self, n_clusters=3, mode='seperate'):
+    def make_mask(self, n_clusters=2):
         """
         Make tissue masks
 
@@ -175,55 +177,115 @@ class RealOct(object):
             Which masks to return. 'seperate' returns tissue mask, wm mask,
             and gm mask. Unified returns all 3.
         """
+        def make_tissue_mask(n_clusters):
+            print('Making whole-tissue mask...')
+            # Smoothing data with gaussian filter
+            preprocessed_vol = torch.clone(self.tensor).to('cuda')
+            preprocessed_vol = torchvision.transforms.functional.gaussian_blur(preprocessed_vol, 15, sigma=1e2)
+            # Sampling volume and computing quantile
+            selection_tensor = torch.randint(0, 100, preprocessed_vol.shape).to('cuda')
+            selection = preprocessed_vol[selection_tensor == 5]
+            selection = selection[selection != 0]
+            q = torch.quantile(selection, 0.3)
+            preprocessed_vol[preprocessed_vol < q] = 0
+            # Freeing up some gpu memory!
+            del selection_tensor
+            del selection
+            torch.cuda.empty_cache()
 
-        backend = dict(dtype=self.tensor.dtype, device=self.tensor.device)
-        # Smoothing data with gaussian filter
-        preprocessed_vol = skimage.filters.gaussian(self.tensor, 10)
-        # Reshaping to 1d
-        preprocessed_vol = preprocessed_vol.reshape(-1, 1)
-        # instantiating kmeans clustering
-        kmeans = sklearn.cluster.KMeans(n_clusters=n_clusters)
-        # applying kmeans to 1d tensor
-        means = kmeans.fit(preprocessed_vol)
-        # getting volume labeled by class type
-        segmented_vol = kmeans.cluster_centers_[kmeans.labels_]
-        # reshaping to 3d and passing volumes to torch
-        segmented_vol = torch.from_numpy(segmented_vol.reshape(self.shape))
-        labelmask = torch.from_numpy(kmeans.labels_.reshape(self.shape))
-        # getting unique labels
-        means = torch.unique(segmented_vol)
-        labels = torch.unique(labelmask)
-        # renumbering floats of mean values to semantic labels
-        for i in range(len(means)):
-            segmented_vol[segmented_vol == means[i]] = labels[i]
-        # converting to int16
-        segmented_vol = segmented_vol.to(torch.int16).numpy()
+            # Normalizing and simplifying data
+            preprocessed_vol -= preprocessed_vol.min()
+            preprocessed_vol /= preprocessed_vol.max()
+            #preprocessed_vol = preprocessed_vol.to(torch.float64)
+            preprocessed_vol *= (256 ** 2)
+            preprocessed_vol -= (256 ** 2) / 2
+            preprocessed_vol = preprocessed_vol.to(torch.int16)
 
-        def seperate_masks(mask):
-            """
-            Makes sense of kmeans tissue mask.
-            """
-            tissue_mask = np.copy(mask)
-            tissue_mask += 1
-            tissue_mask[tissue_mask > 1] = 0
-            tissue_mask = 1 - tissue_mask
+            X = torch.clone(preprocessed_vol).reshape(-1, 1)
+            a = torch.arange(start=0, end=X.shape[0], step=1e6).to(torch.int32)
+            c = [slice(a[i], a[i+1]) for i in range(len(a) - 1)]
+            x = X[c[0]]
+            for i in range(len(c)):
+                if i % 20 == 0:
+                    x = torch.concatenate((x, X[c[i]]))
 
-            gm_mask = np.copy(mask)
+            kmeans = sklearn.cluster.KMeans(n_clusters=2, n_init=3)
+            y_pred = kmeans.fit(x.cpu())
+            complete_pred = kmeans.predict(preprocessed_vol.cpu().reshape(-1, 1))
+
+            idx = np.argsort(kmeans.cluster_centers_.sum(axis=1))
+            lut = np.zeros_like(idx)
+            lut[idx] = np.arange(n_clusters)
+            labels = lut[complete_pred]
+            labels = labels.reshape(preprocessed_vol.shape)
+            labels = labels.astype(np.int8)
+
+            eroded = ndimage.binary_erosion(labels, iterations=10)
+
+            del preprocessed_vol
+            del labels
+            torch.cuda.empty_cache()
+
+            eroded = torch.from_numpy(eroded).to('cuda')
+            eroded_blurred = torchvision.transforms.functional.gaussian_blur(eroded, 9, sigma=1e2)
+            final_pred = eroded_blurred.clip(0)
+
+            del eroded
+            del eroded_blurred
+            torch.cuda.empty_cache()
+
+            return final_pred
+        
+
+        def make_matter_masks(tissue_mask, n_clusters=3):
+            print('Making WM & GM masks...')
+            tissue_masked = tissue_mask.cuda() * self.tensor.cuda()
+            tissue = torchvision.transforms.functional.gaussian_blur(tissue_masked, 15, sigma=1e2)
+
+            del tissue_mask
+            del tissue_masked
+            torch.cuda.empty_cache()
+
+            tissue -= tissue.min()
+            tissue /= tissue.max()
+            tissue *= (255 ** 2)
+            tissue -= (255 ** 2) / 2
+            tissue = tissue.to(torch.int16)
+
+            X = torch.clone(tissue).reshape(-1, 1)
+            a = torch.arange(start=0, end=X.shape[0], step=1e6).to(torch.int32)
+            c = [slice(a[i], a[i+1]) for i in range(len(a) - 1)]
+
+            x = X[c[0]]
+            for i in range(len(c)):
+                if i % 20 == 0:
+                    x = torch.concatenate((x, X[c[i]]))
+
+            kmeans = sklearn.cluster.KMeans(n_clusters=3, n_init=3)
+            y_pred = kmeans.fit(x.cpu().numpy())
+            complete_pred = kmeans.predict(tissue.cpu().reshape(-1, 1))
+
+            idx = np.argsort(kmeans.cluster_centers_.sum(axis=1))
+            lut = np.zeros_like(idx)
+            lut[idx] = np.arange(n_clusters)
+            labels = lut[complete_pred]
+            labels = labels.reshape(tissue.shape)
+            labels = torch.from_numpy(labels).to(torch.uint8)
+
+            gm_mask = torch.clone(labels)
+            wm_mask = torch.clone(labels)
+
             gm_mask[gm_mask != 1] = 0
-
-            wm_mask = np.copy(mask)
             wm_mask[wm_mask != 2] = 0
             wm_mask[wm_mask == 2] = 1
 
+            return gm_mask, wm_mask
+        
+        tissue_mask = make_tissue_mask(n_clusters)
+        gm_mask, wm_mask = make_matter_masks(tissue_mask)
 
-            return tissue_mask, gm_mask, wm_mask
+        return tissue_mask, gm_mask, wm_mask
 
-        if mode == 'seperate':
-            return seperate_masks(segmented_vol)
-        elif mode == 'unified':
-            return segmented_vol
-        else:
-            print("I don't know what kind of mask you want!")
 
     def get_mask(self, mask_type='tissue-mask'):
         """"
@@ -244,9 +306,10 @@ class RealOct(object):
             mask = nib.load(mask_path)
             return mask
         else:
+            print("Looks like I'll make the masks myself then!")
             masks = self.make_mask()
             for i in range(len(mask_types)):
-                nifti = nib.nifti1.Nifti1Image(masks[i], affine=self.affine)
+                nifti = nib.nifti1.Nifti1Image(masks[i].cpu().numpy().astype(np.uint8), affine=self.affine)
                 nib.save(nifti, f'{self.volume_dir}/kmeans-{mask_types[i]}.nii')
             return masks[mask_types.index(mask_type)]
         

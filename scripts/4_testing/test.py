@@ -52,7 +52,7 @@ if __name__ == "__main__":
                 normalize=False,
                 pad_it=True,
                 padding_method='reflect',
-                normalize_patches=True,
+                normalize_patches=False,
                 )
             
             prediction.predict_on_all()

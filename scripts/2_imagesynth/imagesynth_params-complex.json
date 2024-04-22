@@ -4,7 +4,7 @@
         "shape": 10
     },
     "gamma": [0.2, 2],
-    "z_decay": [5],
+    "z_decay": [32],
     "speckle": [0.2, 0.8],
     "imax": 0.80,
     "imin": 0.01

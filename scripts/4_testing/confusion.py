@@ -81,9 +81,10 @@ if __name__ == '__main__':
     fpr = n_fp / (n_fp + n_fn + n_tp) #(n_fp + n_tn)
     fnr = n_fn / (n_fp + n_fn + n_tp) #(n_fn + n_tp)
 
-    print(dice_gt)
-    print(fpr)
-    print(fnr)
+    print(f'{dice_gt}\t{fpr}\t{fnr}')
+    #print(dice_gt)
+    #print(fpr)
+    #print(fnr)
 
 
     #dice_gt = (2* np.count_nonzero(tp)) / ((2* np.count_nonzero(tp)) + np.count_nonzero(fp) + np.count_nonzero(fn))

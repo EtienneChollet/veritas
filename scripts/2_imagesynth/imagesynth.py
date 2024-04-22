@@ -4,7 +4,7 @@ import time
 
 if __name__ == "__main__":
     synth = OctVolSynthDataset(
-        exp_path="/autofs/cluster/octdata2/users/epc28/veritas/output/synthetic_data/exp0004",
+        exp_path="/autofs/cluster/octdata2/users/epc28/veritas/output/synthetic_data/exp0001",
         label_type='label',
         synth_params='complex',
         )
