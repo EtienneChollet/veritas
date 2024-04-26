@@ -1,7 +1,8 @@
 __all__ = [
     'RealOct',
     'RealOctPatchLoader',
-    'RealOctPredict'
+    'RealOctPredict',
+    'RealOctDataset'
 ]
 
 # Standard imports
@@ -11,6 +12,7 @@ import time
 import torch
 import skimage
 import sklearn
+from glob import glob
 import torchvision
 from scipy import ndimage
 from sklearn.cluster import KMeans
@@ -123,15 +125,13 @@ class RealOct(object):
             nifti = nib.load(input)
             # Load tensor on device with dtype. Detach from graph.
             affine = nifti.affine
-            tensor = nifti.get_fdata()
+            tensor = torch.from_numpy(nifti.get_fdata()).to(device=self.device, dtype=torch.float).detach()
         elif isinstance(input, torch.Tensor):
             tensor = input.to(self.device).to(self.dtype).detach()
             nifti = None
         #volume_info(tensor, 'Raw')
         if normalize == True:
             tensor = self.normalize_volume(tensor)
-        # Needs to be a tensor for padding operations
-        tensor = torch.from_numpy(tensor).to(self.device).detach()
         if pad_it == True:
             tensor = self.pad_volume(tensor)
         if self.binarize == True:
@@ -143,10 +143,9 @@ class RealOct(object):
 
     def normalize_volume(self, input):
         print('\nNormalizing volume...')
-        input = torch.from_numpy(input).to(self.device)
+        #input = QuantileTransform(pmin=0.02, pmax=0.98)(input)
         input -= input.min()
         input /= input.max()
-        #input = QuantileTransform(pmin=0.02, pmax=0.98)(input)
         return input
         #volume_info(self.tensor, 'Normalized')
 
@@ -486,10 +485,10 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
         if self.normalize_patches == True:
             #patch -= patch.min()
             #patch /= patch.max()
-            try:
-                patch = QuantileTransform()(patch)
-            except:
-                pass
+            #try:
+            patch = QuantileTransform()(patch.float())
+            #except:
+            #    pass
         prediction = self.trainee(patch)
         prediction = torch.sigmoid(prediction).squeeze()
         weighted_prediction = (prediction * self.patch_weight).to(**self.backend)
@@ -535,3 +534,46 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
         print(f"\nSaving prediction to {self.full_path}...")
         out_nifti = nib.nifti1.Nifti1Image(dataobj=self.imprint_tensor, affine=self.affine)
         nib.save(out_nifti, self.full_path)
+
+
+class RealOctDataset(Dataset):
+    """
+    Dataset for loading and processing 3D vascular networks.
+    """
+    def __init__(self,
+                 path,
+                 subset=None,
+                 ):
+        """
+        Initialize the dataset with the given inputs and subset size.
+
+        Parameters
+        ----------
+        path : str
+            Path to parent directory containing x and y data in dirs "x" and "y"
+        subset : int, optional
+            Number of examples to consider for the dataset, if not all.
+
+        Returns
+        -------
+        label as shape as torch.Tensor of shape (1, n, n, n)
+        """
+        self.subset=slice(subset)
+        self.xpaths = np.asarray(sorted(glob(f'{path}/x/*')))[self.subset]
+        self.ypaths = np.asarray(sorted(glob(f'{path}/y/*')))[self.subset]
+
+    def __len__(self):
+        return len(self.xpaths)
+
+    def __getitem__(self, idx):
+        """
+        Get a patch and corresponding label map.
+
+        Parameters
+        ----------
+        idx : int
+            Index of the label to retrieve.
+        """
+        x_tensor = torch.from_numpy(nib.load(self.xpaths[idx]).get_fdata()).to('cuda').float()
+        y_tensor = torch.from_numpy(nib.load(self.ypaths[idx]).get_fdata()).to('cuda').float()
+        return x_tensor.unsqueeze(0), y_tensor.unsqueeze(0)

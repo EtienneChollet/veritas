@@ -361,7 +361,46 @@ class Checkpoint(object):
         self.checkpoint_paths = glob.glob(f"{self.checkpoint_dir}/*")
 
     def best(self):
-        return [hit for hit in self.checkpoint_paths if 'epoch=' in hit][0]
-    
+        """
+        Return the first checkpoint that includes 'epoch=' in its filename, or None if no such file exists.
+
+        Returns
+        -------
+        str or None
+            The path to the best checkpoint, or None if no checkpoint matches.
+        """
+        # Find all files that include 'epoch=' in their filename
+        hits = [hit for hit in self.checkpoint_paths if 'epoch=' in hit]
+        # Return the first hit if available, otherwise None
+        return hits[0] if hits else None
+
     def last(self):
-        return [hit for hit in self.checkpoint_paths if 'last.ckpt' in hit][0]
+        """
+        Return the last checkpoint file, specifically named 'last.ckpt'.
+
+        Returns
+        -------
+        str or None
+            The path to the last checkpoint, or None if no such file exists.
+        """
+        hits = [hit for hit in self.checkpoint_paths if 'last.ckpt' in hit]
+        return hits[0] if hits else None
+
+    def get(self, type):
+        """
+        Retrieve a checkpoint based on a specified type ('best' or 'last').
+
+        Parameters
+        ----------
+        type : str
+            The type of checkpoint to retrieve ('best' or 'last').
+
+        Returns
+        -------
+        str or None
+            The path to the requested checkpoint, or None if no suitable checkpoint exists.
+        """
+        if type == 'best':
+            return self.best()
+        elif type == 'last':
+            return self.last()

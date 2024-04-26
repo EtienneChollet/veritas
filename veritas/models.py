@@ -3,6 +3,7 @@ __all__ = [
 ]
 # Standard Imports
 import torch
+from torch import nn
 from glob import glob
 import torch.multiprocessing as mp
 from pytorch_lightning import Trainer
@@ -20,7 +21,7 @@ from veritas.synth import OctVolSynth, VascularNetworkDataset
 
 from pytorch_lightning.callbacks import LearningRateMonitor
 
-class Unet(object):
+class Unet(nn.Module):
     """
     Base class for UNet.
     """
@@ -46,6 +47,7 @@ class Unet(object):
         device : {'cuda', 'cpu'}
             Device to load UNet onto.
         """
+        super().__init__()
         self.version_n=version_n
         self.model_dir = model_dir
         self.device=device
@@ -58,9 +60,10 @@ class Unet(object):
         self.metrics = torch.nn.ModuleDict({'dice': self.losses[0]})
         self.synth_dtype=synth_dtype
         self.learning_rate=learning_rate
+        self.to(self.device)
 
 
-    def load(self, backbone_dict=None, type='best', mode='train'):
+    def load(self, backbone_dict=None, augmentation=True, type='best', mode='train'):
         """
         Load a unet from checkpoint
 
@@ -82,60 +85,45 @@ class Unet(object):
             3, 1, 1, 3,
             backbone='UNet', activation=None,
             kwargs_backbone=self.backbone_dict
-            )
+            ).to(self.device)
         #self.segnet = torch.compile(self.segnet)
 
+        # Setting up augmentation
+        if mode == 'train' and augmentation:
+            if isinstance(augmentation, bool) and augmentation:
+                print('Using standard augmentation.')
+                augmentation = OctVolSynth(self.synth_params, dtype=self.synth_dtype)
+            elif not isinstance(augmentation, torch.nn.Module):
+                print('No valid augmentation provided, skipping augmentation.')
+                augmentation = None
+
+        # Configure trainee settings
+        trainee_config = {
+            'network': self.segnet,
+            'loss': self.losses[0],
+            'metrics': self.metrics,
+            'augmentation': augmentation,
+            'lr': self.learning_rate
+            }
+        # Load trainee
+        checkpoint_path = Checkpoint(self.checkpoint_dir).get(type)
         if mode == 'train':
-            trainee = train.SupervisedTrainee(
-                network=self.segnet,
-                loss=self.losses[0],
-                metrics=self.metrics,
-                augmentation=OctVolSynth(
-                    self.synth_params,
-                    dtype=self.synth_dtype),
-                lr=self.learning_rate
-                )
-            if backbone_dict is None:
-                print("Loading checkpoint...")
-                if type == 'best':
-                    trainee = train.FineTunedTrainee.load_from_checkpoint(
-                        checkpoint_path=Checkpoint(self.checkpoint_dir).best(),
-                        trainee=trainee,
-                        loss=self.losses
-                        )
-                elif type == 'last':
-                    trainee = train.FineTunedTrainee.load_from_checkpoint(
-                        checkpoint_path=Checkpoint(self.checkpoint_dir).last(),
-                        trainee=trainee,
-                        loss=self.losses
-                        )
-                else:
-                    print('Not a valid checkpoint')
-                    exit(0)
-            else:
-                trainee = train.FineTunedTrainee(
-                    trainee=trainee,
-                    loss=self.losses
-                )
+            trainee = train.SupervisedTrainee(**trainee_config)
         elif mode == 'test':
-            trainee = train.SupervisedTrainee(
-                network=self.segnet,
-                loss=self.losses[0],
-                augmentation=None,
-                metrics=self.metrics,
-                lr=self.learning_rate
-                )
+            trainee = train.SupervisedTrainee(**trainee_config, augmentation=None)
+
+        # Load from checkpoint
+        if checkpoint_path:
             trainee = train.FineTunedTrainee.load_from_checkpoint(
-                checkpoint_path=Checkpoint(self.checkpoint_dir).best(),
+                checkpoint_path=checkpoint_path,
                 trainee=trainee,
                 loss=self.losses
-            )
+                )
         self.trainee = trainee.to(self.device)
         return trainee
-    
 
-    def new(self, nb_levels=4, nb_features=[32,64,128,256], dropout=0.05, nb_conv=2,
-            kernel_size=3, activation='ReLU', norm='instance'):
+    def new(self, nb_levels=4, nb_features=[32,64,128,256], dropout=0, nb_conv=2,
+            kernel_size=3, activation='ReLU', norm='instance', augmentation=True):
         """
         nb_levels : int
             Number of convolutional levels for Unet.
@@ -164,10 +152,10 @@ class Unet(object):
             }
         PathTools(self.version_path).makeDir()
         JsonTools(self.json_path).log(backbone_dict)  
-        self.trainee = self.load(backbone_dict)
+        self.trainee = self.load(backbone_dict, augmentation)
     
 
-    def train_it(self, data_experiment_number, train_to_val:float=0.95, batch_size:int=1,
+    def train_it(self, data_experiment_number, train_to_val:float=0.8, batch_size:int=1,
                  epochs=1000, check_val_every_n_epoch:int=1,
                  accumulate_gradient_n_batches:int=1, subset=None,
                  texturize_vessels:bool=True, z_decay:bool=True, num_workers=20):
@@ -245,8 +233,6 @@ class Unet(object):
             logger=self.logger,
             callbacks=[self.checkpoint_callback, LearningRateMonitor(logging_interval='step')],
             max_epochs=self.epochs,
-            #gradient_clip_val=0.5,
-            #gradient_clip_algorithm='value'
             )
         # Begin training
         trainer_.fit(

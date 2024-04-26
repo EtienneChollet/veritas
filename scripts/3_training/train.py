@@ -6,7 +6,7 @@ import os
 
 if __name__ == "__main__":
     ##################
-    version_n = 555
+    version_n = 111
     data_params = 'complex'
     synth_params = 'complex'
     ##################
@@ -18,7 +18,7 @@ if __name__ == "__main__":
     unet = Unet(
         version_n=version_n,
         synth_params=synth_params,
-        model_dir='models',
+        model_dir='ablation_models',
         learning_rate=1e-2
         )
     
