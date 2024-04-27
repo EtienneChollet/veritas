@@ -5,165 +5,196 @@ __all__ = [
     'RealOctDataset'
 ]
 
-# Standard imports
+# Standard library imports
+from glob import glob
 import os
+import random
 import sys
 import time
-import torch
+
+# Third-party imports
+import nibabel as nib
+import numpy as np
 import skimage
 import sklearn
-from glob import glob
+from sklearn.cluster import KMeans
+import torch
+from torch.utils.data import Dataset
 import torchvision
 from scipy import ndimage
-from sklearn.cluster import KMeans
-import random
-import numpy as np
-import nibabel as nib
-from veritas.utils import PathTools, volume_info
-from torch.utils.data import Dataset
-from cornucopia.cornucopia.intensity import QuantileTransform
+from typing import Union, Optional, Tuple
 
-# Custom imports
-from veritas.utils import Options
+# Local application/library specific imports
+from cornucopia.cornucopia.intensity import QuantileTransform
+from veritas.utils import Options, PathTools, volume_info
+
 
 class RealOct(object):
     """
     Base class for real OCT volumetric data.
     """
-    def __init__(self,
-                 input:{torch.Tensor, str},
-                 mask:{torch.Tensor, str}=None,
-                 patch_size:int=256,
-                 step_size:int=256,
-                 binarize:bool=False,
-                 binary_threshold:int=0.5,
-                 normalize:bool=False,
-                 pad_it:bool=False,
-                 padding_method:str='reflect', # change to "reflect"
-                 device:str='cuda',
-                 dtype:torch.dtype=torch.float32,
-                 patch_coords_:bool=False,
-                 trainee=None
-                 ):
-
+    def __init__(
+        self,
+        input: Union[torch.Tensor, str],
+        patch_size: int = 128,
+        redundancy: int = 3,
+        binarize: bool = False,
+        binary_threshold: float = 0.5,
+        normalize: bool = False,
+        pad_it: bool = False,
+        padding_method: str = 'reflect',
+        device: str = 'cuda',
+        dtype: torch.dtype = torch.float32
+    ):
         """
         Parameters
         ----------
-        input : {torch.Tensor, 'path'}
-            Tensor of entire tensor or path to nifti.
-        mask : {None, torch.Tensor, 'path'}
+        input : Union[torch.Tensor, str]
+            A tensor containing the entire dataset or a string path to a NIfTI
+            file.
         patch_size : int
-            Size of patch with which to partition tensor into.
-        step_size : int {256, 128, 64, 32, 16}
-            Size of step between adjacent patch origin.
-        binarize : bool
-            Whether to binarize tensor.
-        binary_threshold : float
-            Threshold at which to binarize (must be used with binarized=True)
-        normalize: bool
-            Whether to normalize tensor.
-        pad_it : bool
-            If tensor should be padded.
-        padding_method: {'replicate', 'reflect', 'constant'}
-            How to pad tensor.
-        device: {'cuda', 'cpu'}
-            Device to load tensor onto.
-        dtype: torch.dtype
-            Data type to load tensor as.
+            Size of the patches into which the tensor is divided.
+        step_size : int, optional
+            Distance between the origins of adjacent patches. Typical values
+            might include 256, 128, 64, 32, or 16. Default is 256.
+        binarize : bool, optional
+            Indicates whether to binarize the tensor. If True,
+            `binary_threshold` must be specified. Default is False.
+        binary_threshold : float, optional
+            The threshold value for binarization. Only used if `binarize` is
+            True.
+        normalize : bool, optional
+            Specifies whether to normalize the tensor. Default is False.
+        pad_it : bool, optional
+            If True, the tensor will be padded using the method specified by
+            `padding_method`. Default is False.
+        padding_method : {'replicate', 'reflect', 'constant'}, optional
+            Specifies the method to use for padding. Default is 'reflect'.
+        device : {'cuda', 'cpu'}, optional
+            The device on which the tensor is loaded. Default is 'cuda'.
+        dtype : torch.dtype, optional
+            The data type of the tensor when loaded into a PyTorch tensor.
+            Default is `torch.float32`.
 
         Attributes
         ----------
-        volume_nifti
-            Nifti represnetation of volumetric data.
+        volume_nifti : nib.Nifti1Image or None
+            Represents the NIfTI image of the volumetric data if loaded from a
+            file, otherwise None.
 
         Notes
         -----
-        1. Normalize
-        2. Binarize
-        3. Convert to dtype
+        - The tensor is normalized if `normalize` is set to True.
+        - The tensor is binarized using `binary_threshold` if `binarize` is set
+            to True.
+        - The tensor data type is converted according to the `dtype` parameter.
         """
-        self.input=input
-        self.dtype=dtype
-        self.patch_size=patch_size
-        self.step_size=step_size
-        self.binarize=binarize
-        self.binary_threshold=binary_threshold
-        self.normalize=normalize
-        self.device=device
-        self.pad_it=pad_it
-        self.padding_method=padding_method
-        self.tensor, self.nifti, self.affine = self.load_tensor(
-            self.input,
-            normalize=self.normalize,
-            pad_it=self.pad_it
-            )
-        self.shape = self.tensor.shape
-        #self.mask_tensor, self.mask_nifti, self.mask_affine = self.load_tensor(mask)
-        
-    def load_tensor(
-            self,
-            input,
-            name:str='tensor',
-            normalize:bool=False,
-            pad_it:bool=False,
-            binarize:bool=False
-            ):
-        """
-        Prepare volume.
 
-        Steps
-        -----
-        1. Load input volume if given path
-        2. Convert to float32
-        3. Detach from graph
+        self.input = input
+        self.patch_size = patch_size
+        self.redundancy = redundancy - 1
+        self.step_size = int(patch_size * (1 / (2**self.redundancy)))
+        self.binarize = binarize
+        self.binary_threshold = binary_threshold
+        self.normalize = normalize
+        self.pad_it = pad_it
+        self.padding_method = padding_method
+        self.device = device
+        self.dtype = dtype
+        self.tensor, self.nifti, self.affine = self.load_tensor()
+
+    def load_tensor(self) -> Tuple[
+        torch.Tensor, Optional[nib.Nifti1Image], Optional[np.ndarray]
+    ]:
         """
-        if isinstance(input, str):
-            # Getting name of volume (will be used later for saving prediction)
-            self.tensor_name = input.split('/')[-1].strip('.nii')
-            # Get directory location of volume (will also use later for saving)
-            self.volume_dir = f"/{self.input.strip('.nii').strip(self.tensor_name).strip('/')}"
-            nifti = nib.load(input)
-            # Load tensor on device with dtype. Detach from graph.
+        Loads and processes the input volume, applying normalization, padding, 
+        and binarization as specified.
+
+        Returns
+        -------
+        torch.Tensor
+            The processed tensor data, either loaded from a NIfTI file or
+            received directly, and transformed to the specified device and
+            dtype.
+        Optional[nib.Nifti1Image]
+            The original NIfTI volume if the input is a file path, otherwise
+            None.
+        Optional[np.ndarray]
+            The affine transformation matrix of the NIfTI image if the input is
+            a file path, otherwise None.
+
+        Notes
+        -----
+        - If `input` is a path, the NIfTI file is loaded and the data is
+        converted to the specified dtype and moved to the specified device.
+        - Normalization rescales tensor values to the 0-1 range if `normalize`
+        is True.
+        - Padding adds specified borders around the data if `pad_it` is True.
+        - Binarization converts data to 0 or 1 based on `binary_threshold` if
+        `binarize` is True.
+        """
+        tensor, nifti, affine = None, None, None
+        if isinstance(self.input, str):
+            self.tensor_name = self.input.split('/')[-1].strip('.nii')
+            base_name = self.input.strip('.nii')
+            clean_name = base_name.strip(self.tensor_name).strip('/')
+            self.volume_dir = f"/{clean_name}"
+            nifti = nib.load(self.input)
+            tensor = torch.from_numpy(nifti.get_fdata()).to(
+                self.device, dtype=torch.float32)
             affine = nifti.affine
-            tensor = torch.from_numpy(nifti.get_fdata()).to(device=self.device, dtype=torch.float).detach()
-        elif isinstance(input, torch.Tensor):
-            tensor = input.to(self.device).to(self.dtype).detach()
-            nifti = None
-        #volume_info(tensor, 'Raw')
-        if normalize == True:
+        else:
+            tensor = self.input.to(self.device, self.dtype)
+
+        if self.normalize:
             tensor = self.normalize_volume(tensor)
-        if pad_it == True:
+        if self.pad_it:
             tensor = self.pad_volume(tensor)
-        if self.binarize == True:
-            tensor[tensor <= self.binary_threshold] = 0
-            tensor[tensor > self.binary_threshold] = 1
-        tensor = tensor.to(self.dtype)
+        if self.binarize:
+            tensor = torch.where(
+                tensor > self.binary_threshold, 
+                torch.tensor(1.0, device=self.device),
+                torch.tensor(0.0, device=self.device)
+            )
         return tensor, nifti, affine
 
-
-    def normalize_volume(self, input):
-        print('\nNormalizing volume...')
-        #input = QuantileTransform(pmin=0.02, pmax=0.98)(input)
-        input -= input.min()
-        input /= input.max()
-        return input
-        #volume_info(self.tensor, 'Normalized')
-
-
-    def pad_volume(self, tensor):
+    def normalize_volume(self, tensor: torch.Tensor) -> torch.Tensor:
         """
-        Pad all dimensions of 3 dimensional tensor and update volume.
+        Normalize the tensor to the range 0 to 1.
         """
-        print('\nPadding volume...')
-        # Input tensor must be 4 dimensional [1, n, n, n] to do padding
-        padding = [self.patch_size] * 6 # Create 6 ele list of patch size
-        tensor = torch.nn.functional.pad(
-            input=tensor.unsqueeze(0),
-            pad=padding,
-            mode=self.padding_method
-        )[0]
-        #volume_info(tensor, 'Padded')
+        tensor -= tensor.min()
+        tensor /= tensor.max()
         return tensor
+    
+    def pad_volume(self, tensor: torch.Tensor) -> torch.Tensor:
+        """
+        Applies symmetric padding to a tensor to increase its dimensions,
+        ensuring that its size is compatible with the specified `patch_size`.
+
+        Parameters
+        ----------
+        tensor : torch.Tensor
+            The tensor to be padded.
+
+        Returns
+        -------
+        torch.Tensor
+            The tensor after applying symmetric padding.
+
+        Notes
+        -----
+        Padding is added symmetrically to all dimensions of the input tensor 
+        based on half of the `patch_size`. The padding mode used is determined 
+        by the `padding_method` attribute, which can be 'replicate', 'reflect',
+        or 'constant'.
+        """
+        # Ensures padding does not exceed tensor dimensions
+        padded_tensor = torch.nn.functional.pad(
+            input=tensor.unsqueeze(0),
+            pad=[self.patch_size] * 6,
+            mode=self.padding_method
+        ).squeeze()
+        return padded_tensor
     
     
     def make_mask(self, n_clusters=2):
@@ -180,9 +211,12 @@ class RealOct(object):
             print('Making whole-tissue mask...')
             # Smoothing data with gaussian filter
             preprocessed_vol = torch.clone(self.tensor).to('cuda')
-            preprocessed_vol = torchvision.transforms.functional.gaussian_blur(preprocessed_vol, 15, sigma=1e2)
+            preprocessed_vol = torchvision.transforms.functional.gaussian_blur(
+                preprocessed_vol, 15, sigma=1e2
+                )
             # Sampling volume and computing quantile
-            selection_tensor = torch.randint(0, 100, preprocessed_vol.shape).to('cuda')
+            selection_tensor = torch.randint(
+                0, 100, preprocessed_vol.shape).to('cuda')
             selection = preprocessed_vol[selection_tensor == 5]
             selection = selection[selection != 0]
             q = torch.quantile(selection, 0.3)
@@ -210,8 +244,9 @@ class RealOct(object):
 
             kmeans = sklearn.cluster.KMeans(n_clusters=2, n_init=3)
             y_pred = kmeans.fit(x.cpu())
-            complete_pred = kmeans.predict(preprocessed_vol.cpu().reshape(-1, 1))
-
+            complete_pred = kmeans.predict(
+                preprocessed_vol.cpu().reshape(-1, 1)
+                )
             idx = np.argsort(kmeans.cluster_centers_.sum(axis=1))
             lut = np.zeros_like(idx)
             lut[idx] = np.arange(n_clusters)
@@ -226,7 +261,9 @@ class RealOct(object):
             torch.cuda.empty_cache()
 
             eroded = torch.from_numpy(eroded).to('cuda')
-            eroded_blurred = torchvision.transforms.functional.gaussian_blur(eroded, 9, sigma=1e2)
+            eroded_blurred = torchvision.transforms.functional.gaussian_blur(
+                eroded, 9, sigma=1e2
+                )
             final_pred = eroded_blurred.clip(0)
 
             del eroded
@@ -239,8 +276,9 @@ class RealOct(object):
         def make_matter_masks(tissue_mask, n_clusters=3):
             print('Making WM & GM masks...')
             tissue_masked = tissue_mask.cuda() * self.tensor.cuda()
-            tissue = torchvision.transforms.functional.gaussian_blur(tissue_masked, 15, sigma=1e2)
-
+            tissue = torchvision.transforms.functional.gaussian_blur(
+                tissue_masked, 15, sigma=1e2
+                )
             del tissue_mask
             del tissue_masked
             torch.cuda.empty_cache()
@@ -308,44 +346,69 @@ class RealOct(object):
             print("Looks like I'll make the masks myself then!")
             masks = self.make_mask()
             for i in range(len(mask_types)):
-                nifti = nib.nifti1.Nifti1Image(masks[i].cpu().numpy().astype(np.uint8), affine=self.affine)
-                nib.save(nifti, f'{self.volume_dir}/kmeans-{mask_types[i]}.nii')
+                nifti = nib.nifti1.Nifti1Image(
+                    masks[i].cpu().numpy().astype(np.uint8), affine=self.affine
+                    )
+                nib.save(nifti,
+                         f'{self.volume_dir}/kmeans-{mask_types[i]}.nii'
+                         )
             return masks[mask_types.index(mask_type)]
         
 
 
 class RealOctPatchLoader(RealOct, Dataset):
-    """Stuff"""
+    """
+    A subclass for loading 3D volume patches efficiently using PyTorch, 
+    optimized to work with GPU. It inherits from RealOct and Dataset, and it
+    extracts specific patches defined by spatial coordinates.
+    """
 
     def __init__(self, *args, **kwargs):
+        """
+        Initialize the loader, setting up the internal structure and 
+        computing the coordinates for all patches to be loaded.
+        """
         super().__init__(*args, **kwargs)
-        self.patch_coords()            
+        self.patch_coords()
 
     def __len__(self):
+        """
+        Return the total number of patches.
+        """
         return len(self.complete_patch_coords)
-    
-    def __getitem__(self, idx, tensor=None):
-        working_patch_coords = self.complete_patch_coords[idx]
-        # Generating slices for easy handling
-        x_slice = slice(*working_patch_coords[0])
-        y_slice = slice(*working_patch_coords[1])
-        z_slice = slice(*working_patch_coords[2])        
-        patch = self.tensor[x_slice, y_slice, z_slice].detach()
-        coords = [x_slice, y_slice, z_slice]
-        return patch, coords
+
+    def __getitem__(self, idx: int) -> tuple:
+        """
+        Retrieve a patch by index.
         
+        Parameters:
+            idx (int): The index of the patch to retrieve.
+
+        Returns:
+            tuple: A tuple containing the patch tensor and its slice indices.
+        """
+        x_slice, y_slice, z_slice = self.complete_patch_coords[idx]
+        patch = self.tensor[x_slice, y_slice, z_slice].detach().cuda()
+        return patch, (x_slice, y_slice, z_slice)
     
     def patch_coords(self):
+        """
+        Computes the coordinates for slicing the tensor into patches based on 
+        the defined patch size and step size. This method populates the 
+        complete_patch_coords list with slice objects.
+        """
         self.complete_patch_coords = []
         tensor_shape = self.tensor.shape
-        # used to be x_coords = [[x, x+self.patch_size] for x in range(0, tensor_shape[0] - self.step_size + 1, self.step_size)]
-        x_coords = [[x, x+self.patch_size] for x in range(self.step_size, tensor_shape[0] - self.patch_size, self.step_size)]
-        y_coords = [[y, y+self.patch_size] for y in range(self.step_size, tensor_shape[1] - self.patch_size, self.step_size)]
-        z_coords = [[z, z+self.patch_size] for z in range(self.step_size, tensor_shape[2] - self.patch_size, self.step_size)]
+        x_coords = [slice(x, x + self.patch_size) for x in range(
+            self.step_size, tensor_shape[0] - self.patch_size, self.step_size)]
+        y_coords = [slice(y, y + self.patch_size) for y in range(
+            self.step_size, tensor_shape[1] - self.patch_size, self.step_size)]
+        z_coords = [slice(z, z + self.patch_size) for z in range(
+            self.step_size, tensor_shape[2] - self.patch_size, self.step_size)]
         for x in x_coords:
             for y in y_coords:
                 for z in z_coords:
-                    self.complete_patch_coords.append([x, y, z])
+                    self.complete_patch_coords.append((x, y, z))
 
 
     def random_patch_sampler(self,
@@ -371,7 +434,8 @@ class RealOctPatchLoader(RealOct, Dataset):
         name_prefix : str {'patch', 'prediction'}
             Prefix for naming patches in patch directory. 
         seed : int
-            Random seed for selecting patch ID's. If none, optimal seed will be found.
+            Random seed for selecting patch ID's. If none, optimal seed will be
+            found.
         threshold : float
             Minimum mean value that all patches must have if seed is None. 
         output : {None, 'coords'}
@@ -393,7 +457,8 @@ class RealOctPatchLoader(RealOct, Dataset):
         if seed is None:
             print('Finding first best seed according to threshold')
             if threshold is None:
-                print('You need to define a threshold to find the best seed :)')
+                print("""You need to define a threshold to find the best seed
+                       :)""")
                 exit(0)
             threshold = float(threshold)
             keep_going = True
@@ -402,9 +467,11 @@ class RealOctPatchLoader(RealOct, Dataset):
                 patch_means = []
                 torch.random.manual_seed(seed)
                 # Gathering patch indicies for mean analysis
-                random_patch_indicies = torch.randint(len(self), [n_patches]).tolist()
+                random_patch_indicies = torch.randint(
+                    len(self), [n_patches]
+                    ).tolist()
                 for i in range(len(random_patch_indicies)):
-                    patch, coords = self[random_patch_indicies[i]]#(threshold_tensor)
+                    patch, coords = self[random_patch_indicies[i]]
                     patch_means.append(patch.mean().item())
                 least = min(patch_means)
                 if least < threshold:
@@ -421,7 +488,9 @@ class RealOctPatchLoader(RealOct, Dataset):
         elif isinstance(seed, int):
             print(f'Using user defined seed (seed {seed})')
             torch.random.manual_seed(seed)
-            random_patch_indicies = torch.randint(len(self), [n_patches]).tolist()
+            random_patch_indicies = torch.randint(
+                len(self), [n_patches]
+                ).tolist()
         else:
             print('What do I do with that seed! Gimme an int!')
         # Saving patches
@@ -452,47 +521,94 @@ class RealOctPatchLoader(RealOct, Dataset):
 
 
 class RealOctPredict(RealOctPatchLoader, Dataset):
+    """
+    This class extends RealOctPatchLoader for prediction purposes, applying
+    normalization and custom weighting to patches for use in a machine learning
+    prediction script.
 
-    def __init__(self, trainee=None, normalize_patches=True, *args, **kwargs):
+    Parameters
+    ----------
+    trainee : Optional[torch.nn.Module], optional
+        The machine learning model that will be testing on the patches,
+        by default None.
+    normalize_patches : bool, optional
+        Whether to normalize patches before processing, by default True.
+
+    Attributes
+    ----------
+    backend : dict
+        Configuration for tensor data types and device.
+    imprint_tensor : torch.Tensor
+        A tensor initialized to zero, with the same shape as the dataset's
+        main tensor, used for storing patch imprints.
+    patch_weight : torch.Tensor
+        A 3D weight matrix created by the outer product of a sine wave filter,
+        designed to attenuate edge prediction signal.
+    """
+    def __init__(self, trainee: torch.nn.Module = None,
+                 normalize_patches: bool = True, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.backend = dict(dtype=self.dtype, device=self.device)
+        self.backend = {'dtype': self.dtype, 'device': self.device}
         self.trainee = trainee
         self.imprint_tensor = torch.zeros(self.tensor.shape, **self.backend)
-        self.normalize_patches=normalize_patches
-        # The edges of the kernel will be, at most, multiplied by min_scale
-        # No weight = 3/2, zeros = 0
-        min_scale = 1/2 #1/2
-        half_filter_1d = torch.linspace(min_scale, torch.pi/2, self.patch_size//2, **self.backend).sin()
-        filter_1d = torch.concat([half_filter_1d, half_filter_1d.flip(0)])
-        self.patch_weight = filter_1d[:, None, None] * filter_1d[None, :, None] * filter_1d[None, None, :]
-        self.patch_weight = self.patch_weight.to('cuda')
+        self.normalize_patches = normalize_patches
+        self.patch_weight = self._prepare_patch_weights()
 
+
+    def _prepare_patch_weights(self, min_scale: float = 0.5
+                                ) -> torch.Tensor:
+        """
+        Create a 3D patch weight by the outer product of the 1D filter.
+
+        Parameters
+        ----------
+        size : int
+            Size of the patch.
+
+        Returns
+        -------
+        torch.Tensor
+            3D weights tensor for patches.
+        """
+        half_filter_1d = torch.linspace(
+            min_scale, torch.pi/2, self.patch_size // 2,
+            device=self.device).sin()
+        filter_1d = torch.concat([half_filter_1d, half_filter_1d.flip(0)])
+        patch_weight = (
+            filter_1d[:, None, None]
+            * filter_1d[None, :, None]
+            * filter_1d[None, None, :]).cuda()
+        return patch_weight
+        
     def __getitem__(self, idx:int):
         """
-        Predict on a single patch.
+        Predict on a single patch, optimized fort GPU.
 
         Parameters
         ----------
         idx : int
             Patch ID number to predict on. Updates self.imprint_tensor.
         """
-        patch, coords = super().__getitem__(idx)
-        ## Needs to go on cuda for prediction. Useful when predicting on large
-        ## volumes that are on CPU.
-        if self.device != 'cuda':
-            patch = patch.to('cuda')
-        patch = patch.unsqueeze(0).unsqueeze(0)
-        if self.normalize_patches == True:
-            #patch -= patch.min()
-            #patch /= patch.max()
-            #try:
-            patch = QuantileTransform()(patch.float())
-            #except:
-            #    pass
-        prediction = self.trainee(patch)
-        prediction = torch.sigmoid(prediction).squeeze()
-        weighted_prediction = (prediction * self.patch_weight).to(**self.backend)
-        self.imprint_tensor[coords[0], coords[1], coords[2]] += weighted_prediction
+        with torch.no_grad():
+            patch, coords = super().__getitem__(idx)
+            ## Needs to go on cuda for prediction. Useful when predicting on 
+            # large volumes that are on CPU.
+            if self.device != 'cuda':
+                patch = patch.to('cuda')
+            patch = patch.unsqueeze(0).unsqueeze(0)
+            if self.normalize_patches == True:
+                try:
+                    patch = QuantileTransform()(patch.float())
+                except:
+                    pass
+            prediction = self.trainee(patch)
+            prediction = torch.sigmoid(prediction).squeeze()
+            weighted_prediction = (
+                prediction * self.patch_weight
+                )
+            self.imprint_tensor[
+                coords[0], coords[1], coords[2]
+                ] += weighted_prediction
 
     def predict_on_all(self):
         if self.tensor.dtype != torch.float32:
@@ -501,14 +617,20 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
         n_patches = len(self)
         t0 = time.time()
         print('Starting predictions!!')
-        with torch.no_grad():            
-            for i in range(n_patches):
-                self[i]
-                if (i+1) % 10 == 0:
-                    total_elapsed_time = time.time() - t0
-                    average_time_per_pred = round(total_elapsed_time / (i+1), 3)
-                    sys.stdout.write(f"\rPrediction {i + 1}/{n_patches} | {average_time_per_pred} sec/pred | {round(average_time_per_pred * n_patches / 60, 2)} min total pred time")
-                    sys.stdout.flush()
+        for i in range(n_patches):
+            self[i]
+            if (i+1) % 10 == 0:
+                total_elapsed_time = time.time() - t0
+                avg_pred_time = round(total_elapsed_time / (i+1), 3)
+                total_pred_time = round(avg_pred_time * n_patches / 60, 2)
+                # Construct the status message
+                status_message = (
+                    f"\rPrediction {i + 1}/{n_patches} | "
+                    f"{avg_pred_time} sec/pred | "
+                    f"{total_pred_time} min total pred time"
+                    )
+                sys.stdout.write(status_message)
+                sys.stdout.flush()
 
         # Remove padding
         s = slice(self.patch_size, -self.patch_size)
@@ -527,13 +649,191 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
         Parameters
         ----------
         dir : str
-            Directory to save volume. If None, it will save volume to same path.
+            Directory to save volume. If None, it will save volume to same
+            path.
         """
         self.out_dir, self.full_path = Options(self).out_filepath(dir)
         os.makedirs(self.out_dir, exist_ok=True)
         print(f"\nSaving prediction to {self.full_path}...")
-        out_nifti = nib.nifti1.Nifti1Image(dataobj=self.imprint_tensor, affine=self.affine)
+        out_nifti = nib.nifti1.Nifti1Image(
+            dataobj=self.imprint_tensor,
+            affine=self.affine)
         nib.save(out_nifti, self.full_path)
+
+
+class RealOctPredictLightweight(RealOct, Dataset):
+        """
+        A PyTorch Dataset that extracts patches from a 3D volume with 
+        overlapping and reflection padding, suitable for training a neural
+        network model.
+
+        Parameters
+        ----------
+        trainee : torch.nn.Module, optional
+            The neural network model that will be used to predict on patches.
+        patch_size : int, default 128
+            The edge length of the cube used for patches (D, H, W are equal).
+        redundancy : int, default 3
+            Overlap redundancy factor to determine step size.
+        normalize_patches : bool, default True
+            Whether to normalize the patches.
+        """
+        def __init__(self, trainee: torch.nn.Module = None,
+                     patch_size: int = 128, redundancy: int = 3,
+                     normalize_patches: bool = True, 
+                     *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.trainee = trainee
+            self.patch_size = [patch_size] * 3
+            self.redundancy = redundancy-1
+            self.normalize_patches = normalize_patches
+            self.step_size = [int(patch_size * (1 / (2**self.redundancy)))] * 3
+            self.imprint_tensor = torch.zeros(
+                self.tensor.shape, device=self.device
+                )
+            self.patch_weight = self._prepare_patch_weights()
+            self.num_patches = [
+                (self.tensor.shape[i] + (2*self.patch_size[i])) 
+                // self.step_size[i]
+                for i in range(3)
+            ]
+
+        def _prepare_patch_weights(self, min_scale: float = 0.5
+                                   ) -> torch.Tensor:
+            """
+            Create a 3D patch weight by the outer product of the 1D filter.
+
+            Parameters
+            ----------
+            size : int
+                Size of the patch.
+
+            Returns
+            -------
+            torch.Tensor
+                3D weights tensor for patches.
+            """
+            half_filter_1d = torch.linspace(
+                min_scale, torch.pi/2, self.patch_size[0] // 2,
+                device=self.device).sin()
+            filter_1d = torch.concat([half_filter_1d, half_filter_1d.flip(0)])
+            patch_weight = (
+                filter_1d[:, None, None]
+                * filter_1d[None, :, None]
+                * filter_1d[None, None, :]).cuda()
+            return patch_weight
+
+        def __len__(self):
+            # Total number of patches
+            return (self.num_patches[0] 
+                    * self.num_patches[1] 
+                    * self.num_patches[2])
+
+        def __getitem__(self, idx):
+            # Calculate the patch indices in 3D grid
+            z = ((idx // (self.num_patches[1] 
+                          * self.num_patches[2])) 
+                          % self.num_patches[0]) - self.redundancy
+            y = ((idx // self.num_patches[2]) 
+                 % self.num_patches[1]) - self.redundancy
+            x = (idx % self.num_patches[2]) - self.redundancy
+            step_size = self.step_size
+            patch_size = self.patch_size
+            tensor_size = self.tensor.size()
+
+            # Calculate the start and end indices for each dimension
+            start_z = z * step_size[0] - step_size[0]
+            start_y = y * step_size[1] - step_size[1]
+            start_x = x * step_size[2] - step_size[2]
+            end_z = start_z + patch_size[0]
+            end_y = start_y + patch_size[1]
+            end_x = start_x + patch_size[2]
+            # Calculate padding needs for start and end of each dimension
+            pad_before_z = max(0, -start_z)
+            pad_after_z = max(0, end_z - self.tensor.size(0))
+            pad_before_y = max(0, -start_y)
+            pad_after_y = max(0, end_y - self.tensor.size(1))
+            pad_before_x = max(0, -start_x)
+            pad_after_x = max(0, end_x - self.tensor.size(2))
+
+            patch = self.tensor[
+                pad_before_z+start_z:end_z-pad_after_z,
+                pad_before_y+start_y:end_y-pad_after_y,
+                pad_before_x+start_x:end_x-pad_after_x
+                ]
+    
+            if torch.count_nonzero(torch.tensor(patch.shape)) > 2:
+                pad = (pad_before_x, pad_after_x, pad_before_y,
+                       pad_after_y, pad_before_z, pad_after_z)
+                patch = torch.nn.functional.pad(
+                    +patch.unsqueeze(0), pad=pad, mode=self.padding_method)
+                if self.normalize_patches == True:
+                    try:
+                        patch = QuantileTransform()(patch.float())
+                    except:
+                        pass
+                prediction = self.trainee(patch.unsqueeze(0))
+                prediction = torch.sigmoid(prediction).squeeze()
+                weighted_prediction = (
+                    prediction * self.patch_weight
+                )
+                # Trimming prediction to fit inside imprint
+                weighted_prediction = weighted_prediction[
+                    pad_before_z:self.patch_size[0] - pad_after_z,
+                    pad_before_y:self.patch_size[1] - pad_after_y,
+                    pad_before_x:self.patch_size[2] - pad_after_x
+                ]
+                self.imprint_tensor[
+                    pad_before_z+start_z : end_z-pad_after_z,
+                    pad_before_y+start_y:end_y-pad_after_y,
+                    pad_before_x+start_x:end_x-pad_after_x
+                    ] += weighted_prediction
+                
+        def predict_on_all(self):
+            if self.tensor.dtype != torch.float32:
+                self.tensor = self.tensor.to(torch.float32)
+            n_patches = len(self)
+            t0 = time.time()
+            print('Starting predictions!!')
+            for i in range(n_patches):
+                self[i]
+                if (i+1) % 10 == 0:
+                    total_elapsed_time = time.time() - t0
+                    avg_pred_time = round(total_elapsed_time / (i+1), 3)
+                    total_pred_time = round(avg_pred_time * n_patches / 60, 2)
+                    # Construct the status message
+                    status_message = (
+                        f"\rPrediction {i + 1}/{n_patches} | "
+                        f"{avg_pred_time} sec/pred | "
+                        f"{total_pred_time} min total pred time"
+                        )
+                    sys.stdout.write(status_message)
+                    sys.stdout.flush()
+
+            redundancy = ((self.patch_size[0] ** 3) 
+                          // (self.step_size[0] ** 3))
+            print(f"\n\n{redundancy}x Averaging...")
+            self.imprint_tensor /= redundancy
+            self.imprint_tensor = self.imprint_tensor.cpu().numpy()
+
+        def save_prediction(self, dir=None):
+            """
+            Save prediction volume.
+
+            Parameters
+            ----------
+            dir : str
+                Directory to save volume. If None, it will save volume to same
+                path.
+            """
+            self.step_size = self.step_size[0]
+            self.out_dir, self.full_path = Options(self).out_filepath(dir)
+            os.makedirs(self.out_dir, exist_ok=True)
+            print(f"\nSaving prediction to {self.full_path}...")
+            out_nifti = nib.nifti1.Nifti1Image(
+                dataobj=self.imprint_tensor, affine=self.affine)
+            nib.save(out_nifti, self.full_path)
+                            
 
 
 class RealOctDataset(Dataset):
@@ -550,7 +850,8 @@ class RealOctDataset(Dataset):
         Parameters
         ----------
         path : str
-            Path to parent directory containing x and y data in dirs "x" and "y"
+            Path to parent directory containing x and y data in dirs
+            "x" and "y"
         subset : int, optional
             Number of examples to consider for the dataset, if not all.
 
@@ -574,6 +875,118 @@ class RealOctDataset(Dataset):
         idx : int
             Index of the label to retrieve.
         """
-        x_tensor = torch.from_numpy(nib.load(self.xpaths[idx]).get_fdata()).to('cuda').float()
-        y_tensor = torch.from_numpy(nib.load(self.ypaths[idx]).get_fdata()).to('cuda').float()
+        x_tensor = torch.from_numpy(
+            nib.load(self.xpaths[idx]).get_fdata()).to('cuda').float()
+        y_tensor = torch.from_numpy(
+            nib.load(self.ypaths[idx]).get_fdata()).to('cuda').float()
         return x_tensor.unsqueeze(0), y_tensor.unsqueeze(0)
+
+
+class SubpatchExtractor:
+    """
+    A class for extracting subpatches from a parent NIfTI volume
+    using affine transformations for coordinates and PyTorch for
+    computations.
+
+    Attributes
+    ----------
+    parent_path : str
+        The file path to the parent volume.
+    parent_nift : nib.Nifti1Image
+        The parent volume loaded as a NIfTI image.
+    parent_tensor : torch.Tensor
+        The parent volume data loaded into a GPU tensor.
+
+    Methods
+    -------
+    load_parent():
+        Loads the parent volume data into a GPU tensor.
+
+    find_subpatch_coordinates_using_affine(subpatch_path: str) -> Tuple[int, int, int]:
+        Calculates the voxel coordinates of the subpatch origin within
+        the parent volume using affine transformations.
+
+    extract_subpatch(subpatch_origin: Tuple[int, int, int], size: Tuple[int, int, int]) -> nib.Nifti1Image:
+        Extracts and returns a subpatch from the parent volume based on
+        the specified origin and size.
+    """
+
+    def __init__(self, parent_path):
+        """
+        Parameters
+        ----------
+        parent_path : str
+            The file path to the parent volume.
+        """
+        self.parent_path = parent_path
+        self.parent_nift = None
+        self.parent_tensor = None
+        self.load_parent()
+
+    def load_parent(self):
+        self.parent_nift = nib.load(self.parent_path)
+        self.parent_tensor = torch.from_numpy(
+            self.parent_nift.get_fdata()
+            ).cuda()
+
+    def find_subpatch_coordinates_using_affine(self, subpatch_path: str) -> Tuple[int, int, int]:
+        """
+        Calculates the origin coordinates of a subpatch within the parent
+        volume using affine transformations from both the parent and subpatch.
+
+        Parameters
+        ----------
+        subpatch_path : str
+            The file path to the subpatch volume.
+
+        Returns
+        -------
+        Tuple[int, int, int]
+            The voxel coordinates (x, y, z) of the subpatch origin within
+            the parent volume.
+        """
+        subpatch_nift = nib.load(subpatch_path)
+        parent_affine = self.parent_nift.affine
+        subpatch_affine = subpatch_nift.affine
+        subpatch_origin_in_world = subpatch_affine @ np.array([0, 0, 0, 1])
+        parent_affine_inv = np.linalg.inv(parent_affine)
+        subpatch_origin_in_parent = parent_affine_inv @ subpatch_origin_in_world
+        return tuple(np.round(subpatch_origin_in_parent[:3]).astype(int))
+
+
+    def extract_subpatch(self, subpatch_origin: Tuple[int, int, int], 
+                         size: Tuple[int, int, int]) -> nib.Nifti1Image:
+        """
+        Extracts a subpatch from the parent volume given the origin and
+        size.
+
+        Parameters
+        ----------
+        subpatch_origin : Tuple[int, int, int]
+            The voxel coordinates (x, y, z) marking the starting point
+            of the subpatch.
+        size : Tuple[int, int, int]
+            The size of the subpatch (width, height, depth) in voxels.
+
+        Returns
+        -------
+        nib.Nifti1Image
+            The extracted subpatch as a NIfTI image.
+        """
+        start_x, start_y, start_z = subpatch_origin
+        end_x = start_x + size[0]
+        end_y = start_y + size[1]
+        end_z = start_z + size[2]
+        subpatch_tensor = self.parent_tensor[
+            start_x:end_x, start_y:end_y, start_z:end_z]
+        return nib.Nifti1Image(
+            subpatch_tensor.cpu().numpy(),
+            self.parent_nift.affine,
+            self.parent_nift.header)
+
+#parent_path = '/autofs/cluster/octdata2/users/epc28/data/CAA/caa6/frontal/caa6_frontal.nii'
+#subpatch_path = '/autofs/cluster/octdata2/users/epc28/data/CAA/caa6/frontal/ground_truth/etienne/gt_3.nii'
+#extractor = SubpatchExtractor(parent_path)
+#coords = extractor.find_subpatch_coordinates_using_affine(subpatch_path)
+#subpatch_nift = extractor.extract_subpatch(coords, [64, 64, 64])
+#subpatch_tensor = subpatch_nift.get_fdata()
