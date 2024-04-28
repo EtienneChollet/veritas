@@ -33,6 +33,7 @@ class Unet(nn.Module):
             synth_dtype:torch.dtype=torch.float32,
             learning_rate:float=1e-4,
             device:str='cuda',
+            json_path:str=None,
             
         ):
         """
@@ -54,7 +55,8 @@ class Unet(nn.Module):
         self.synth_params=synth_params
         self.output_path="output"
         self.version_path=f"{self.output_path}/{model_dir}/version_{version_n}"
-        self.json_path=f"{self.version_path}/json_params.json"
+        self.json_path= json_path if json_path is not None else f"{self.version_path}/json_params.json"
+        #f"{self.version_path}/json_params.json"
         self.checkpoint_dir = f"{self.version_path}/checkpoints"
         self.losses={0: losses.DiceLoss(labels=[1], activation='Sigmoid')}
         self.metrics = torch.nn.ModuleDict({'dice': self.losses[0]})
@@ -110,7 +112,8 @@ class Unet(nn.Module):
         if mode == 'train':
             trainee = train.SupervisedTrainee(**trainee_config)
         elif mode == 'test':
-            trainee = train.SupervisedTrainee(**trainee_config, augmentation=None)
+            trainee_config['augmentation'] = None
+            trainee = train.SupervisedTrainee(**trainee_config)
 
         # Load from checkpoint
         if checkpoint_path:
