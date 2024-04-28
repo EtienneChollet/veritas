@@ -929,7 +929,28 @@ class SubpatchExtractor:
             self.parent_nift.get_fdata()
             ).cuda()
 
-    def find_subpatch_coordinates_using_affine(self, subpatch_path: str) -> Tuple[int, int, int]:
+    def find_subpatch_coordinates_using_affine(self, subpatch_affine) -> Tuple[int, int, int]:
+        """
+        Calculates the origin coordinates of a subpatch within the parent
+        volume using affine transformations from both the parent and subpatch.
+
+        Parameters
+        ----------
+        subpatch_path : str
+            The file path to the subpatch volume.
+
+        Returns
+        -------
+        Tuple[int, int, int]
+            The voxel coordinates (x, y, z) of the subpatch origin within
+            the parent volume.
+        """
+        subpatch_origin_in_world = subpatch_affine @ np.array([0, 0, 0, 1])
+        parent_affine_inv = np.linalg.inv(self.parent_nift.affine)
+        subpatch_origin_in_parent = parent_affine_inv @ subpatch_origin_in_world
+        return tuple(np.round(subpatch_origin_in_parent[:3]).astype(int))
+    
+    def find_subpatch_coordinates_using_nifti(self, subpatch_path: str) -> Tuple[int, int, int]:
         """
         Calculates the origin coordinates of a subpatch within the parent
         volume using affine transformations from both the parent and subpatch.
