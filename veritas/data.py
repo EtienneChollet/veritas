@@ -8,6 +8,7 @@ __all__ = [
 # Standard library imports
 from glob import glob
 import os
+import gc
 import random
 import sys
 import time
@@ -22,11 +23,14 @@ import torch
 from torch.utils.data import Dataset
 import torchvision
 from scipy import ndimage
-from typing import Union, Optional, Tuple
+from typing import Union, Optional, Tuple, List
+
 
 # Local application/library specific imports
 from cornucopia.cornucopia.intensity import QuantileTransform
 from veritas.utils import Options, PathTools, volume_info
+from veritas.models import PatchPredict
+
 
 
 class RealOct(object):
@@ -549,7 +553,7 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
                  normalize_patches: bool = True, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.backend = {'dtype': self.dtype, 'device': self.device}
-        self.trainee = trainee
+        self.trainee = trainee.eval()
         self.imprint_tensor = torch.zeros(self.tensor.shape, **self.backend)
         self.normalize_patches = normalize_patches
         self.patch_weight = self._prepare_patch_weights()
@@ -598,9 +602,11 @@ class RealOctPredict(RealOctPatchLoader, Dataset):
             patch = patch.unsqueeze(0).unsqueeze(0)
             if self.normalize_patches == True:
                 try:
-                    patch = QuantileTransform()(patch.float())
+                    #0.2, 0.8
+                    patch = QuantileTransform(vmin=0.2, vmax=0.8)(patch.float())
                 except:
-                    pass
+                    patch -= patch.min()
+                    patch /= patch.max()
             prediction = self.trainee(patch)
             prediction = torch.sigmoid(prediction).squeeze()
             weighted_prediction = (
@@ -859,7 +865,8 @@ class RealOctDataset(Dataset):
         -------
         label as shape as torch.Tensor of shape (1, n, n, n)
         """
-        self.subset=slice(subset)
+        #self.subset=slice(subset)
+        self.subset=subset
         self.xpaths = np.asarray(sorted(glob(f'{path}/x/*')))[self.subset]
         self.ypaths = np.asarray(sorted(glob(f'{path}/y/*')))[self.subset]
 
@@ -911,23 +918,30 @@ class SubpatchExtractor:
         the specified origin and size.
     """
 
-    def __init__(self, parent_path):
+    def __init__(self, parent_path=None, parent_tensor=None, parent_affine=None):
         """
         Parameters
         ----------
         parent_path : str
             The file path to the parent volume.
         """
-        self.parent_path = parent_path
-        self.parent_nift = None
-        self.parent_tensor = None
-        self.load_parent()
+        if (parent_tensor is not None) and (parent_affine is not None):
+            self.parent_tensor = parent_tensor
+            self.parent_affine = parent_affine
+        elif (parent_tensor is None) and (parent_affine is None):
+            self.parent_path = parent_path
+            self.parent_nift, self.parent_tensor = self.load_parent()
+            self.parent_affine = self.parent_nift.affine
+        else:
+            print('Make sure you have an affine!')
+            
 
     def load_parent(self):
-        self.parent_nift = nib.load(self.parent_path)
-        self.parent_tensor = torch.from_numpy(
-            self.parent_nift.get_fdata()
-            ).cuda()
+        parent_nift = nib.load(self.parent_path)
+        parent_tensor = torch.from_numpy(
+            parent_nift.get_fdata()
+            ).to('cuda')
+        return parent_nift, parent_tensor
 
     def find_subpatch_coordinates_using_affine(self, subpatch_affine) -> Tuple[int, int, int]:
         """
@@ -946,7 +960,7 @@ class SubpatchExtractor:
             the parent volume.
         """
         subpatch_origin_in_world = subpatch_affine @ np.array([0, 0, 0, 1])
-        parent_affine_inv = np.linalg.inv(self.parent_nift.affine)
+        parent_affine_inv = np.linalg.inv(self.parent_affine)
         subpatch_origin_in_parent = parent_affine_inv @ subpatch_origin_in_world
         return tuple(np.round(subpatch_origin_in_parent[:3]).astype(int))
     
@@ -967,7 +981,7 @@ class SubpatchExtractor:
             the parent volume.
         """
         subpatch_nift = nib.load(subpatch_path)
-        parent_affine = self.parent_nift.affine
+        parent_affine = self.parent_affine
         subpatch_affine = subpatch_nift.affine
         subpatch_origin_in_world = subpatch_affine @ np.array([0, 0, 0, 1])
         parent_affine_inv = np.linalg.inv(parent_affine)
@@ -976,7 +990,8 @@ class SubpatchExtractor:
 
 
     def extract_subpatch(self, subpatch_origin: Tuple[int, int, int], 
-                         size: Tuple[int, int, int]) -> nib.Nifti1Image:
+                         size: Tuple[int, int, int],
+                         return_: str='tensor') -> nib.Nifti1Image:
         """
         Extracts a subpatch from the parent volume given the origin and
         size.
@@ -988,6 +1003,8 @@ class SubpatchExtractor:
             of the subpatch.
         size : Tuple[int, int, int]
             The size of the subpatch (width, height, depth) in voxels.
+        return_ : str {'tensor', 'nifti'}
+            What this function will return.
 
         Returns
         -------
@@ -998,16 +1015,308 @@ class SubpatchExtractor:
         end_x = start_x + size[0]
         end_y = start_y + size[1]
         end_z = start_z + size[2]
+        new_affine = self.parent_affine.copy()
+        for i in range(3):
+            new_affine[i, 3] += subpatch_origin[i] * self.parent_affine[i, i]
+
         subpatch_tensor = self.parent_tensor[
             start_x:end_x, start_y:end_y, start_z:end_z]
-        return nib.Nifti1Image(
-            subpatch_tensor.cpu().numpy(),
-            self.parent_nift.affine,
-            self.parent_nift.header)
+        if return_ == 'tensor':
+            return subpatch_tensor
+        elif return_ == 'nifti':
+            nift = nib.Nifti1Image(
+                    subpatch_tensor.cpu().numpy(),
+                    new_affine)
+            return nift
 
-#parent_path = '/autofs/cluster/octdata2/users/epc28/data/CAA/caa6/frontal/caa6_frontal.nii'
-#subpatch_path = '/autofs/cluster/octdata2/users/epc28/data/CAA/caa6/frontal/ground_truth/etienne/gt_3.nii'
-#extractor = SubpatchExtractor(parent_path)
-#coords = extractor.find_subpatch_coordinates_using_affine(subpatch_path)
-#subpatch_nift = extractor.extract_subpatch(coords, [64, 64, 64])
-#subpatch_tensor = subpatch_nift.get_fdata()
+
+class CAAPrediction:
+    """Manage efficient patch-based predictions on NIfTI data.
+
+    Parameters
+    ----------
+    case : str
+        Identifier of the medical case.
+    roi : str
+        Region of interest within the medical case.
+    model_n : int
+        Model version number.
+    patch_size : int
+        Size of the patches to extract for prediction (default 128).
+    redundancy : int
+        Redundancy factor for overlap of patches (default 2).
+    model_exp_name : str
+        Base directory name for model outputs (default 'models').
+    subpatch_ids : Optional[List[str]]
+        Subpatch identifiers for detailed analysis.
+
+    Attributes
+    ----------
+    imprint_tensor : torch.Tensor
+        Tensor to store the predictions.
+    complete_patch_coords : List[tuple]
+        Coordinates for patches used in prediction.
+    num_patches : int
+        Number of patches.
+
+    Methods
+    -------
+    predict()
+        Perform all predictions using the loaded model and update
+        imprint tensor.
+    save_niftis()
+        Save outputs and subpatches as NIfTI files.
+    """
+    def __init__(
+            self,
+            case: str,
+            roi: str,
+            model_n: int,
+            patch_size: int = 128,
+            redundancy: int = 2,
+            model_exp_name: str = 'models',
+            subpatch_ids: Optional[List[str]] = None
+            ) -> None:
+        self.case = case
+        self.roi = roi
+        self.model_n = model_n
+        self.patch_size = patch_size
+        self.model_exp_name = model_exp_name
+        self.redundancy = redundancy-1
+        self.step_size = int(patch_size * (1 / (2**self.redundancy)))
+        self.subpatch_ids = subpatch_ids
+        self.case_roi_basedir = f'/autofs/cluster/octdata2/users/epc28/data/CAA/{case}/{roi}'
+        self.model_prediction_dir = f'/autofs/cluster/octdata2/users/epc28/veritas/output/{model_exp_name}/version_{model_n}/predictions'
+        self.parent_path = f'{self.case_roi_basedir}/{case}_{roi}.nii'
+        self.parent_tensor, self.parent_affine= self._load_parent()
+        print('Parent Loaded')
+        print('Parent Padded')
+        self.imprint_tensor = torch.zeros(self.parent_tensor.shape, device='cuda').to(torch.float32)
+        self.complete_patch_coords = self._get_patch_coords()
+        self.num_patches = len(self.complete_patch_coords)
+
+    def predict(self):
+        sys.stdout.write(f'\rNow Predicting.')
+        sys.stdout.flush()
+        predictor_ = PatchPredict(model_n=self.model_n, model_exp_name=self.model_exp_name)
+        for i in self.complete_patch_coords:
+            try:
+                self.imprint_tensor[i] += predictor_.predict(self.parent_tensor[i])
+            except:
+                pass
+        del self.parent_tensor, predictor_
+        torch.cuda.empty_cache()
+        gc.collect()
+        self._reformat_imprint_tensor()
+
+    def save_niftis(self):
+        # Start by extracting and saving subpatches
+        if self.subpatch_ids is not None:
+            for id in self.subpatch_ids:
+                extractor = SubpatchExtractor(
+                    parent_tensor=self.imprint_tensor,
+                    parent_affine=self.parent_affine
+                    )
+                # subpatch refers to the thing that will be referenced to get the good coordinates
+                subpatch_inpath = f'{self.case_roi_basedir}/ground_truth/etienne/gt_{id}.nii'
+                subpatch_nifti = nib.load(subpatch_inpath)
+                subpatch_aff = subpatch_nifti.affine
+                coords = extractor.find_subpatch_coordinates_using_affine(subpatch_aff)
+                subpatch_nift = extractor.extract_subpatch(coords, [64, 64, 64], return_='nifti')
+                subpatch_outpath = f'{self.model_prediction_dir}/{self.case}-{self.roi}_patch-{id}.nii'
+                nib.save(subpatch_nift, subpatch_outpath)
+                status_message = f"\rSaved subpatch {id}: {subpatch_outpath}"
+                sys.stdout.write(status_message)
+                sys.stdout.flush()
+
+        # Save raw probability map
+        imprint_tensor_outpath = f'{self.model_prediction_dir}/{self.case}-{self.roi}_prediction-r{self.redundancy+1}.nii'
+        imprint_nifti = nib.nifti1.Nifti1Image(self.imprint_tensor.to(torch.float32).cpu().numpy(), self.parent_affine)
+        nib.save(imprint_nifti, imprint_tensor_outpath)
+        status_message = f"\rSaved probability map: {imprint_tensor_outpath}"
+        sys.stdout.write(status_message)
+        sys.stdout.flush()
+
+        # Save binary map
+        binary_imprint_tensor_outpath = f'{self.model_prediction_dir}/{self.case}-{self.roi}_prediction-r{self.redundancy+1}-BINARY.nii'
+        self.imprint_tensor[self.imprint_tensor >= 0.5] = 1
+        self.imprint_tensor[self.imprint_tensor < 0.5] = 0
+        self.imprint_tensor = self.imprint_tensor.to(torch.uint8).cpu().numpy()
+        imprint_nifti = nib.nifti1.Nifti1Image(self.imprint_tensor, self.parent_affine)
+        nib.save(imprint_nifti, binary_imprint_tensor_outpath)
+        status_message = f"\rSaved binarized probability map: {binary_imprint_tensor_outpath}"
+        sys.stdout.write(status_message)
+        sys.stdout.flush()
+
+
+    def _reformat_imprint_tensor(self):
+        if self._got_padded:
+            self.imprint_tensor = self.imprint_tensor[
+                self.patch_size:-self.patch_size,
+                self.patch_size:-self.patch_size,
+                self.patch_size:-self.patch_size
+                ]
+        redundancy = (self.patch_size ** 3) // (self.step_size ** 3)
+        print(f"\n\n{redundancy}x Averaging...")
+        self.imprint_tensor /= redundancy
+
+
+    def _get_patch_coords(self):
+        patch_size = self.patch_size
+        step_size = self.step_size
+        parent_shape = self.parent_tensor.shape
+        complete_patch_coords = []
+        x_coords = [slice(x, x + patch_size) for x in range(
+            step_size, parent_shape[0] - patch_size, step_size)]
+        y_coords = [slice(y, y + patch_size) for y in range(
+            step_size, parent_shape[1] - patch_size, step_size)]
+        z_coords = [slice(z, z + patch_size) for z in range(
+            step_size, parent_shape[2] - patch_size, step_size)]
+        for x in x_coords:
+            for y in y_coords:
+                for z in z_coords:
+                    complete_patch_coords.append((x, y, z))
+        complete_patch_coords = np.array(complete_patch_coords)
+        return complete_patch_coords
+
+    def _load_parent(self):
+        nift = nib.load(self.parent_path)
+        aff = nift.affine
+        tensor = torch.from_numpy(nift.get_fdata())#.to('cuda')
+        tensor = self._padit(tensor).to('cuda')
+        return tensor, aff
+
+    def _padit(self, tensor):
+        pad = [self.patch_size] * 6
+        tensor = torch.nn.functional.pad(tensor.unsqueeze(0).unsqueeze(0), pad, mode='reflect')
+        tensor = tensor.squeeze()
+        self._got_padded = True
+        return tensor
+
+
+
+import torch
+import torch.nn.functional as F
+
+class UNetPredictor:
+    def __init__(self, model, model_path, device='cuda'):
+        """
+        Initialize the predictor with the model checkpoint and device.
+
+        Parameters
+        ----------
+        model_path : str
+            Path to the saved model checkpoint.
+        device : torch.device, optional
+            Device to run the model on. If None, uses CUDA if available.
+        """
+        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = model.to('cuda')
+        self.load_model(model_path)
+
+    def load_model(self, model_path):
+        """
+        Load the model from a checkpoint.
+
+        Parameters
+        ----------
+        model_path : str
+            Path to the model checkpoint to load.
+        """
+        checkpoint = torch.load(model_path, map_location=self.device)
+        self.model.load_state_dict(checkpoint['state_dict'])
+        self.model.eval()
+
+    def predict(self, image_path):
+        """
+        Make a prediction using an image file path.
+
+        Parameters
+        ----------
+        image_path : str
+            Path to the image to predict.
+
+        Returns
+        -------
+        torch.Tensor
+            The model's prediction as a tensor.
+        """
+        image = self.preprocess_input(image_path)
+        return self.predict_tensor(image)
+
+
+    def preprocess_input(self, image_path):
+        """
+        Load and preprocess an input image from a file path.
+
+        Parameters
+        ----------
+        image_path : str
+            Path to the input image.
+
+        Returns
+        -------
+        torch.Tensor
+            Preprocessed image tensor.
+        """
+        image = nib.load(image_path).get_fdata()
+        image = torch.from_numpy(image)  # Add channel and batch dimensions
+        image = image.to(torch.float32).to('cuda')
+        return image
+
+    def predict_tensor(self, tensor):
+        """
+        Make a prediction using a pre-loaded tensor.
+
+        Parameters
+        ----------
+        tensor : torch.Tensor
+            A pre-loaded and preprocessed tensor ready for prediction.
+
+        Returns
+        -------
+        torch.Tensor
+            The model's prediction as a tensor.
+        """
+        with torch.no_grad():
+            prediction = self.model(tensor.to('cuda'))
+        return F.softmax(prediction, dim=1)
+        #return prediction.sigmoid()  # Assuming the output needs to be sigmoid-activated
+
+def main(case, roi, model_n, redundancy, subpatch_ids, model_exp_name='models'):
+    t1 = time.time()
+    predictor = CAAPrediction(
+        case=case,
+        roi=roi,
+        model_n=model_n,
+        redundancy=redundancy,
+        subpatch_ids=subpatch_ids,
+        model_exp_name=model_exp_name
+        )
+    print('Starting predictions:', time.time() - t1)
+    predictor.predict()
+    print('Done predicting:', time.time() - t1)
+    predictor.save_niftis()
+    print('Done. Total time [s]:', time.time() - t1)
+
+
+if __name__ == '__main__':
+    case_roi = {
+        'caa6-frontal' : ['caa6', 'frontal'],
+        'caa6-occipital' : ['caa6', 'occipital'],
+        'caa26-frontal' : ['caa26', 'frontal'],
+        'caa26-occipital' : ['caa26', 'occipital'],
+    }
+    patches_ = {
+        'caa6-frontal' : ['3', '4'],
+        'caa6-occipital' : ['4', '5'],
+        'caa26-frontal' : ['0', '1'],
+        'caa26-occipital' : ['3', '8'],
+    }
+    versions = [22222]
+    print('Starting Tests!!!')
+    for version in versions:
+        for key in case_roi.keys():
+            case, roi = case_roi[key]
+            patches = patches_[key]
+            main(case, roi, version, redundancy=2, subpatch_ids=patches, model_exp_name='cco_models')
