@@ -7,12 +7,15 @@ __all__ = [
 ]
 # Standard Imports
 import os
+import sys
 import glob
 import json
 import torch
 import shutil
 import numpy as np
+import torch.nn.functional as F
 import math as pymath
+import scipy.ndimage as ndimage
 #from torchmetrics.functional import dice
 
 class Options(object):
@@ -404,3 +407,186 @@ class Checkpoint(object):
             return self.best()
         elif type == 'last':
             return self.last()
+
+def delete_folder(path):
+    """
+    Deletes a folder and all its contents.
+
+    Args:
+    path (str): The path of the folder to be deleted.
+    """
+    try:
+        shutil.rmtree(path)
+        print(f"Folder '{path}' has been deleted successfully.")
+    except Exception as e:
+        print(f"Failed to delete the folder: {e}")
+
+
+def stretch_contrast(tensor: torch.Tensor, multiplier=1.5) -> torch.Tensor:
+    """
+    Stretch the contrast of a tensor that has been normalized to the range
+    [-1, 1] by adjusting the values based on their standard deviation.
+
+    Parameters
+    ----------
+    tensor : torch.Tensor
+        The input tensor with values normalized to [-1, 1].
+
+    Returns
+    -------
+    torch.Tensor
+        The contrast-stretched tensor, still within the range [-1, 1].
+
+    """
+    mean = torch.mean(tensor)
+    std_dev = torch.std(tensor)
+    # Adjust the contrast multiplier based on desired stretching
+    stretched_tensor = mean + multiplier * (tensor - mean)
+    # Clip the values to maintain the range between -1 and 1
+    stretched_tensor = torch.clamp(stretched_tensor, min=-1, max=1)
+    return stretched_tensor
+
+
+def get_gaussian_window(tensor_shape=(64, 64, 64), sigma=2):
+    # Create a 64^3 patch with values initialized to 1
+    patch = torch.ones(tensor_shape, dtype=torch.float32)
+    
+    # Create Gaussian window along each dimension
+    x = torch.linspace(-1, 1, tensor_shape[0])
+    y = torch.linspace(-1, 1, tensor_shape[1])
+    z = torch.linspace(-1, 1, tensor_shape[2])
+    
+    x_gaussian = torch.exp(-0.5 * (x / sigma) ** 2)
+    y_gaussian = torch.exp(-0.5 * (y / sigma) ** 2)
+    z_gaussian = torch.exp(-0.5 * (z / sigma) ** 2)
+    
+    # Create a 3D Gaussian window
+    window = x_gaussian.view(-1, 1, 1) * y_gaussian.view(1, -1, 1) * z_gaussian.view(1, 1, -1)
+    
+    # Apply the window to the patch
+    attenuated_patch = patch * window
+
+    attenuated_patch = torch.stack((attenuated_patch, attenuated_patch, attenuated_patch), dim=0)
+    
+    return attenuated_patch.cuda()
+
+
+def normalize(t):
+    min_val = torch.min(t)
+    max_val = torch.max(t)
+    normalized_tensor = 2 * (t - min_val) / (max_val - min_val) - 1
+    return normalized_tensor
+
+def scale_tensor(tensor, min_target=0.1, max_target=1):
+    min_val = torch.min(tensor)
+    max_val = torch.max(tensor)
+    # Normalize to [0, 1]
+    normalized_tensor = (tensor - min_val) / (max_val - min_val)
+    # Scale to [min_target, max_target]
+    scaled_tensor = min_target + normalized_tensor * (max_target - min_target)
+    return scaled_tensor
+
+def inject_noise(tensor, noise_factor=0.1):
+    """
+    Injects random noise into a 3D tensor.
+    
+    Parameters:
+    tensor (torch.Tensor): The input tensor to which noise will be added.
+    noise_factor (float): The factor by which the noise will be scaled.
+    
+    Returns:
+    torch.Tensor: The tensor with added noise.
+    """
+    # Ensure the input tensor is a 3D tensor
+    if tensor.dim() != 4:
+        raise ValueError("Input tensor must be 3-dimensional")
+    
+    # Generate random noise
+    noise = 1 + torch.randn_like(tensor)
+    
+    # Scale the noise and add it to the input tensor
+    noisy_tensor = tensor + noise_factor * noise
+    
+    return noisy_tensor
+
+
+def remove_small_components(tensor, min_size=20):
+    # Label the connected components in the tensor
+    labeled_tensor, num_features = ndimage.label(tensor)
+    
+    # Find the size of each component
+    component_sizes = np.bincount(labeled_tensor.ravel())
+    
+    # Create an array to keep only components that are larger than min_size
+    remove_mask = component_sizes < min_size
+    
+    # Zero out small components
+    cleaned_tensor = labeled_tensor.copy()
+    cleaned_tensor[remove_mask[labeled_tensor]] = 0
+    
+    # Convert back to binary tensor
+    cleaned_tensor = cleaned_tensor > 0
+    
+    return cleaned_tensor
+
+class FullPredict:
+
+    def __init__(self, tensor, predictor, patch_size=128, step_size=64):
+        self.tensor = tensor
+        #self.norm = transforms.Normalize(tensor.mean(), tensor.std())
+        self.patch_size = patch_size
+        self.step_size = step_size
+        self._padit()
+        self.predictor = predictor
+        self.imprint_tensor = torch.zeros((1, 3, self.tensor.shape[0], self.tensor.shape[1], self.tensor.shape[2]), dtype=torch.float32, device='cuda')
+        print(self.imprint_tensor.shape)
+        self.complete_patch_coords = self._get_patch_coords()
+        self.num_patches = len(self.complete_patch_coords)
+
+    def predict(self, gaussian_sigma=10):
+        sys.stdout.write(f'\rNow Predicting.')
+        sys.stdout.flush()
+        for i in self.complete_patch_coords:
+            in_tensor = self.tensor[i].unsqueeze(0).unsqueeze(0).to(torch.float32)
+            in_tensor -= in_tensor.min()
+            in_tensor /= in_tensor.max()
+            prediction = self.predictor.predict_tensor(in_tensor).to(torch.float32) * get_gaussian_window(sigma=gaussian_sigma)
+            prediction = F.softmax(prediction, dim=1)
+            self.imprint_tensor[..., i[0], i[1], i[2]] += prediction.to(torch.float32)
+        torch.cuda.empty_cache()
+        self._reformat_imprint_tensor()
+
+    def _get_patch_coords(self):
+        patch_size = self.patch_size
+        step_size = self.step_size
+        parent_shape = self.tensor.shape
+        complete_patch_coords = []
+        x_coords = [slice(x, x + patch_size) for x in range(
+            step_size, parent_shape[0] - patch_size, step_size)]
+        y_coords = [slice(y, y + patch_size) for y in range(
+            step_size, parent_shape[1] - patch_size, step_size)]
+        z_coords = [slice(z, z + patch_size) for z in range(
+            step_size, parent_shape[2] - patch_size, step_size)]
+        for x in x_coords:
+            for y in y_coords:
+                for z in z_coords:
+                    complete_patch_coords.append((x, y, z))
+        complete_patch_coords = np.array(complete_patch_coords)
+        return complete_patch_coords
+
+    def _reformat_imprint_tensor(self):
+        if self._got_padded:
+            self.imprint_tensor = self.imprint_tensor[:, :, 
+                self.patch_size:-self.patch_size,
+                self.patch_size:-self.patch_size,
+                self.patch_size:-self.patch_size
+                ]
+        redundancy = (self.patch_size ** 3) // (self.step_size ** 3)
+        print(f"\n\n{redundancy}x Averaging...")
+        self.imprint_tensor /= redundancy
+
+    def _padit(self):
+        pad = [self.patch_size] * 6
+        self.tensor = torch.nn.functional.pad(self.tensor.unsqueeze(0), pad, mode='reflect')
+        self.tensor = self.tensor.squeeze()
+        self._got_padded = True
