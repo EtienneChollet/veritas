@@ -17,6 +17,8 @@ sandbox/
 *checkpoint_epoch*
 events.out.tfevents*
 runs
+*cpython*
+
 
 # Distribution / packaging
 .Python
