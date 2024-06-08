@@ -14,7 +14,7 @@ oct_volumes/
 real_data/
 synthetic_data/
 sandbox/
-
+*checkpoint_epoch*
 
 # Distribution / packaging
 .Python
