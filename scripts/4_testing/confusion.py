@@ -8,6 +8,8 @@ if __name__ == '__main__':
     # Parsing arguments
     parser = argparse.ArgumentParser(description='TP+FP+FN Volume Constructor')
 
+    parser.add_argument('--model-dir', type=str, default='models',
+                        help='step size used to make the prediction (default: 32)')
     parser.add_argument('--version', type=int, default=1,
                         help='model version used to make the prediction (default: 1)')
     parser.add_argument('--step-size', type=int, default=32,
@@ -15,6 +17,7 @@ if __name__ == '__main__':
     parser.add_argument('--filter', type=bool, default=False)
 
     args = parser.parse_args()
+    model_dir = args.model_dir
     version = args.version
     step_size = args.step_size
     filter = args.filter
@@ -35,7 +38,7 @@ if __name__ == '__main__':
     tissue_mask = nib.load('/autofs/cluster/octdata2/users/epc28/data/caroline_data/I46_Somatosensory_20um_crop.pia.nii').get_fdata().astype(out_dtype)
 
     # PREDICTION
-    prediction = nib.load(f'/autofs/cluster/octdata2/users/epc28/veritas/output/models/version_{version}/predictions/I46_Somatosensory_20um_crop-prediction_stepsz-{step_size}.nii.gz').get_fdata()
+    prediction = nib.load(f'/autofs/cluster/octdata2/users/epc28/veritas/output/{model_dir}/version_{version}/predictions/I46_Somatosensory_20um_crop-prediction_stepsz-{step_size}.nii.gz').get_fdata()
     prediction[prediction < threshold] = 0
     prediction[prediction >= threshold] = 1
     prediction = prediction.astype(out_dtype)
@@ -60,7 +63,7 @@ if __name__ == '__main__':
     #prediction = prediction
     #v8_prediction = v8_prediction
 
-    prediction_binary_out = f'/autofs/cluster/octdata2/users/epc28/veritas/output/models/version_{version}/predictions/v{version}_I46_Somatosensory_20um_crop-prediction_stepsz-{step_size}_thresh-0.5.nii.gz'
+    prediction_binary_out = f'/autofs/cluster/octdata2/users/epc28/veritas/output/{model_dir}/version_{version}/predictions/v{version}_I46_Somatosensory_20um_crop-prediction_stepsz-{step_size}_thresh-0.5.nii.gz'
     prediction_binary_out_nifti = nib.nifti1.Nifti1Image(dataobj=prediction, affine=affine)
     nib.save(prediction_binary_out_nifti, prediction_binary_out)
 
@@ -97,7 +100,7 @@ if __name__ == '__main__':
 
 
     out_vol = tp + fp + fn
-    confusion_gt_out = f'/autofs/cluster/octdata2/users/epc28/veritas/output/models/version_{version}/predictions/v{version}-confusion_gt.nii.gz'
+    confusion_gt_out = f'/autofs/cluster/octdata2/users/epc28/veritas/output/{model_dir}/version_{version}/predictions/v{version}-confusion_gt.nii.gz'
     out_nifti = nib.nifti1.Nifti1Image(dataobj=out_vol, affine=affine)
     nib.save(out_nifti, confusion_gt_out)
 
@@ -115,7 +118,7 @@ if __name__ == '__main__':
     #print(f'{round(dice_gt, 3)}\n{round(dice_v8, 3)}')
     #print(f'{round(dice_gt, 3)},{round(dice_v8, 3)}')
 
-    confusion_v8_out = f'/autofs/cluster/octdata2/users/epc28/veritas/output/models/version_{version}/predictions/v{version}-confusion_v8.nii.gz'
+    confusion_v8_out = f'/autofs/cluster/octdata2/users/epc28/veritas/output/{model_dir}/version_{version}/predictions/v{version}-confusion_v8.nii.gz'
     out_nifti = nib.nifti1.Nifti1Image(dataobj=out_vol, affine=affine)
     nib.save(out_nifti, confusion_v8_out)
 
