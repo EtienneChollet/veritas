@@ -1,4 +1,5 @@
 __all__ = [
+    'MatchHistogram'
     'Options',
     'Thresholding',
     'PathTools',
@@ -14,9 +15,79 @@ import torch
 import shutil
 import numpy as np
 import torch.nn.functional as F
-import math as pymath
 import scipy.ndimage as ndimage
-#from torchmetrics.functional import dice
+from torch import nn
+
+
+class MatchHistogram(nn.Module):
+    def __init__(self, mean=0.0, std=0.2, num_bins=256):
+        """
+        Histogram Matching Module to map the intensity values of an image to follow a normal distribution.
+
+        Parameters
+        ----------
+        mean : float, optional
+            Mean of the normal distribution, by default 0.0.
+        std : float, optional
+            Standard deviation of the normal distribution, by default 0.2.
+        num_bins : int, optional
+            Number of bins for histogram, by default 256.
+        """
+        super(MatchHistogram, self).__init__()
+        self.mean = mean
+        self.std = std
+        self.num_bins = num_bins
+
+    def calculate_cdf(self, hist):
+        """Calculate the cumulative distribution function (CDF) for a histogram."""
+        cdf = hist.cumsum(0)
+        cdf_normalized = cdf / cdf[-1]
+        return cdf_normalized
+
+    def forward(self, source):
+        """
+        Forward pass to perform histogram matching.
+
+        Parameters
+        ----------
+        source : torch.Tensor
+            Source image (HxW), normalized between -1 and 1.
+
+        Returns
+        -------
+        matched : torch.Tensor
+            The transformed source image with histogram matching a normal distribution.
+        """
+        device = source.device
+
+        # Normalize the source image to the range [0, 255] for histogram computation
+        source_normalized = ((source + 1) / 2 * 255).clamp(0, 255).long()
+
+        # Compute the histogram and CDF of the source image
+        src_hist = torch.histc(source_normalized.float(), bins=self.num_bins, min=0, max=255).to(device)
+        src_cdf = self.calculate_cdf(src_hist)
+
+        # Create the normal distribution CDF
+        normal_values = torch.linspace(-1, 1, self.num_bins, device=device)
+        normal_cdf = torch.distributions.Normal(self.mean, self.std).cdf(normal_values)
+        normal_cdf = normal_cdf / normal_cdf[-1]  # Normalize to range [0, 1]
+
+        # Create a lookup table to map the pixel values
+        lookup_table = torch.zeros(self.num_bins, device=device)
+        for src_pixel in range(self.num_bins):
+            normal_pixel = torch.searchsorted(normal_cdf, src_cdf[src_pixel])
+            lookup_table[src_pixel] = normal_pixel
+
+        # Apply the lookup table to the source image
+        source_flat = source_normalized.flatten().long()
+        matched_flat = lookup_table[source_flat]
+        matched = matched_flat.view(source.shape).float()
+
+        # Convert matched image back to the range [-1, 1]
+        matched = matched / (self.num_bins - 1) * 2 - 1
+
+        return matched
+
 
 class Options(object):
     """
@@ -513,32 +584,39 @@ def inject_noise(tensor, noise_factor=0.1):
 def remove_small_components(tensor, min_size=20):
     # Label the connected components in the tensor
     labeled_tensor, num_features = ndimage.label(tensor)
-    
+
     # Find the size of each component
     component_sizes = np.bincount(labeled_tensor.ravel())
-    
+
     # Create an array to keep only components that are larger than min_size
     remove_mask = component_sizes < min_size
-    
+
     # Zero out small components
     cleaned_tensor = labeled_tensor.copy()
     cleaned_tensor[remove_mask[labeled_tensor]] = 0
-    
+
     # Convert back to binary tensor
     cleaned_tensor = cleaned_tensor > 0
-    
+
     return cleaned_tensor
+
 
 class FullPredict:
 
-    def __init__(self, tensor, predictor, patch_size=128, step_size=64):
+    def __init__(self, tensor, predictor, patch_size=128, step_size=64,
+                 padding='reflect'):
         self.tensor = tensor
-        #self.norm = transforms.Normalize(tensor.mean(), tensor.std())
+        # self.norm = transforms.Normalize(tensor.mean(), tensor.std())
         self.patch_size = patch_size
         self.step_size = step_size
+        self.padding = padding
         self._padit()
         self.predictor = predictor
-        self.imprint_tensor = torch.zeros((1, 3, self.tensor.shape[0], self.tensor.shape[1], self.tensor.shape[2]), dtype=torch.float32, device='cuda')
+        self.imprint_tensor = torch.zeros((1, 3, self.tensor.shape[0],
+                                           self.tensor.shape[1],
+                                           self.tensor.shape[2]),
+                                          dtype=torch.float32,
+                                          device='cuda')
         print(self.imprint_tensor.shape)
         self.complete_patch_coords = self._get_patch_coords()
         self.num_patches = len(self.complete_patch_coords)
@@ -547,12 +625,17 @@ class FullPredict:
         sys.stdout.write(f'\rNow Predicting.')
         sys.stdout.flush()
         for i in self.complete_patch_coords:
-            in_tensor = self.tensor[i].unsqueeze(0).unsqueeze(0).to(torch.float32)
+            in_tensor = self.tensor[i].unsqueeze(0).unsqueeze(0).to(
+                torch.float32)
             in_tensor -= in_tensor.min()
             in_tensor /= in_tensor.max()
-            prediction = self.predictor.predict_tensor(in_tensor).to(torch.float32) * get_gaussian_window(sigma=gaussian_sigma)
+            in_tensor *= 2
+            in_tensor -= 1
+            prediction = self.predictor.predict_tensor(in_tensor).to(
+                torch.float32) * get_gaussian_window(sigma=gaussian_sigma)
             prediction = F.softmax(prediction, dim=1)
-            self.imprint_tensor[..., i[0], i[1], i[2]] += prediction.to(torch.float32)
+            self.imprint_tensor[..., i[0], i[1], i[2]] += prediction.to(
+                torch.float32)
         torch.cuda.empty_cache()
         self._reformat_imprint_tensor()
 
@@ -587,6 +670,7 @@ class FullPredict:
 
     def _padit(self):
         pad = [self.patch_size] * 6
-        self.tensor = torch.nn.functional.pad(self.tensor.unsqueeze(0), pad, mode='reflect')
+        self.tensor = torch.nn.functional.pad(self.tensor.unsqueeze(0), pad,
+                                              mode=self.padding)
         self.tensor = self.tensor.squeeze()
         self._got_padded = True
