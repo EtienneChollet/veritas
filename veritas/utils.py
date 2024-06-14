@@ -17,7 +17,7 @@ import shutil
 # Third-party imports
 import numpy as np
 import torch
-from torchmetrics import dice
+from torchmetrics.functional import dice
 import torch.nn.functional as F
 from torch import nn
 import scipy.ndimage as ndimage
