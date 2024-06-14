@@ -261,3 +261,115 @@ class EllipsoidSampler(nn.Module):
 #    ellipsoid_sampler = EllipsoidSampler(volume_size, num_ellipsoids, axes_range, label_range)
 #    volume = ellipsoid_sampler()
 #    print(volume.shape)
+
+
+import torch
+import torch.nn as nn
+
+class AngularBlobbySampler(nn.Module):
+    """
+    A PyTorch module for randomly sampling non-overlapping blobby shapes with
+    angular edges in a 3D volume using GPU acceleration.
+
+    Attributes
+    ----------
+    volume_size : tuple
+        The dimensions of the volume (depth, height, width).
+    num_blobs : int
+        Number of blobs to generate.
+    axes_range : tuple
+        Minimum and maximum lengths for the semi-axes of the blobs.
+    label_range : tuple
+        Minimum and maximum label values.
+    """
+
+    def __init__(self, volume_size, num_blobs, axes_range, label_range):
+        super(AngularBlobbySampler, self).__init__()
+        self.volume_size = volume_size
+        self.num_blobs = num_blobs
+        self.axes_range = axes_range
+        self.label_range = label_range
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu")
+
+    def forward(self):
+        """
+        Generates a volume with randomly sampled angular blobby shapes with irregular edges
+        and no overlapping blobs.
+
+        Returns
+        -------
+        torch.Tensor
+            The 3D volume tensor with sampled blobs.
+        """
+        volume = torch.zeros(
+            self.volume_size,
+            dtype=torch.int32).to(self.device)  # Use int32 for volume
+        depth, height, width = self.volume_size
+        centers = []
+        axes_list = []
+
+        while len(centers) < self.num_blobs:
+            axes = torch.randint(
+                self.axes_range[0],
+                self.axes_range[1] + 1,
+                (3,),
+                device=self.device)
+            center = (
+                torch.randint(
+                    axes[0], depth - axes[0], (1,), device=self.device).item(),
+                torch.randint(
+                    axes[1], height - axes[1], (1,), device=self.device).item(),
+                torch.randint(
+                    axes[2], width - axes[2], (1,), device=self.device).item()
+            )
+
+            # Check for overlaps
+            overlap = False
+            for c, a in zip(centers, axes_list):
+                distance = torch.sqrt(
+                    torch.tensor((center[0] - c[0]) ** 2 +
+                                 (center[1] - c[1]) ** 2 +
+                                 (center[2] - c[2]) ** 2, device=self.device))
+                if distance < max(a) + max(axes):
+                    overlap = True
+                    break
+            if not overlap:
+                centers.append(center)
+                axes_list.append(axes)
+
+        for center, axes in zip(centers, axes_list):
+            # Generate angular blobby edges by adding random noise to the axes
+            z, y, x = torch.meshgrid(
+                torch.arange(depth, device=self.device) - center[0],
+                torch.arange(height, device=self.device) - center[1],
+                torch.arange(width, device=self.device) - center[2],
+                indexing='ij')
+            
+            # Use a Perlin-like noise function to create more blobby shapes with angular edges
+            noise_scale = 1  # Control the "blobbiness"
+            noise = torch.normal(0, noise_scale, size=z.size(), device=self.device)
+
+            # Create angular edges by adding a term that introduces sharpness
+            # [0.75, 3]
+            sharpness = Uniform(0.75, 3)()
+            mask = ((torch.abs(z / (axes[0] + noise)) ** sharpness +
+                     torch.abs(y / (axes[1] + noise)) ** sharpness +
+                     torch.abs(x / (axes[2] + noise)) ** sharpness) <= 1)
+            
+            label_value = Uniform(*self.label_range)()
+            volume = volume.to(torch.float32)
+            volume[mask] = label_value
+
+        return volume
+
+# Example usage
+# if __name__ == "__main__":
+#    volume_size = (100, 100, 100)
+#    num_blobs = 20  # Increase the number of blobs for higher density
+#    axes_range = (5, 15)
+#    label_range = (1, 255)
+
+#    blobby_sampler = AngularBlobbySampler(volume_size, num_blobs, axes_range, label_range)
+#    volume = blobby_sampler()
+#    print(volume.shape)
