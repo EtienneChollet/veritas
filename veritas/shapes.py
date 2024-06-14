@@ -160,3 +160,104 @@ class SphereSampler(nn.Module):
 #    volume = volume.cpu()
 # plt.imshow(volume[30].numpy())  # Visualize a specific slice of the volume
 # plt.show()
+
+
+class EllipsoidSampler(nn.Module):
+    """
+    A PyTorch module for randomly sampling non-overlapping ellipsoids with
+    irregular edges in a 3D volume using GPU acceleration.
+
+    Attributes
+    ----------
+    volume_size : tuple
+        The dimensions of the volume (depth, height, width).
+    num_ellipsoids : int
+        Number of ellipsoids to generate.
+    axes_range : tuple
+        Minimum and maximum lengths for the semi-axes of the ellipsoids.
+    label_range : tuple
+        Minimum and maximum label values.
+    """
+
+    def __init__(self, volume_size, num_ellipsoids, axes_range, label_range):
+        super(EllipsoidSampler, self).__init__()
+        self.volume_size = volume_size
+        self.num_ellipsoids = num_ellipsoids
+        self.axes_range = axes_range
+        self.label_range = label_range
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu")
+
+    def forward(self):
+        """
+        Generates a volume with randomly sampled ellipsoids with irregular
+        edges and no overlapping ellipsoids.
+
+        Returns
+        -------
+        torch.Tensor
+            The 3D volume tensor with sampled ellipsoids.
+        """
+        volume = torch.zeros(
+            self.volume_size,
+            dtype=torch.int32).to(self.device)  # Use int32 for volume
+        depth, height, width = self.volume_size
+        centers = []
+        axes_list = []
+
+        while len(centers) < self.num_ellipsoids:
+            axes = torch.randint(
+                self.axes_range[0],
+                self.axes_range[1] + 1,
+                (3,),
+                device=self.device)
+            center = (
+                torch.randint(
+                    axes[0], depth - axes[0], (1,), device=self.device).item(),
+                torch.randint(
+                    axes[1], height - axes[1], (1,), device=self.device).item(),
+                torch.randint(
+                    axes[2], width - axes[2], (1,), device=self.device).item()
+            )
+
+            # Check for overlaps
+            overlap = False
+            for c, a in zip(centers, axes_list):
+                distance = torch.sqrt(
+                    torch.tensor((center[0] - c[0]) ** 2 +
+                                 (center[1] - c[1]) ** 2 +
+                                 (center[2] - c[2]) ** 2, device=self.device))
+                if distance < max(a) + max(axes):
+                    overlap = True
+                    break
+            if not overlap:
+                centers.append(center)
+                axes_list.append(axes)
+
+        for center, axes in zip(centers, axes_list):
+            # Generate irregular edges by adding random noise to the axes
+            z, y, x = torch.meshgrid(
+                torch.arange(depth, device=self.device) - center[0],
+                torch.arange(height, device=self.device) - center[1],
+                torch.arange(width, device=self.device) - center[2],
+                indexing='ij')
+            noise = torch.normal(0, 0.5, size=z.size(), device=self.device)
+            mask = ((z / (axes[0] + noise)) ** 2 +
+                    (y / (axes[1] + noise)) ** 2 +
+                    (x / (axes[2] + noise)) ** 2) <= 1
+            label_value = Uniform(*self.label_range).sample().item()
+            volume = volume.to(torch.float32)
+            volume[mask] = label_value
+
+        return volume
+
+# Example usage
+# if __name__ == "__main__":
+#    volume_size = (100, 100, 100)
+#    num_ellipsoids = 10
+#    axes_range = (5, 15)
+#    label_range = (1, 255)#
+
+#    ellipsoid_sampler = EllipsoidSampler(volume_size, num_ellipsoids, axes_range, label_range)
+#    volume = ellipsoid_sampler()
+#    print(volume.shape)
