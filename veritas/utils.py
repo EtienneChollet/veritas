@@ -1,28 +1,33 @@
 __all__ = [
-    'MatchHistogram'
+    'MatchHistogram',
     'Options',
     'Thresholding',
     'PathTools',
     'JsonTools',
     'Checkpoint'
 ]
-# Standard Imports
+
+# Standard imports
 import os
 import sys
 import glob
 import json
-import torch
 import shutil
+
+# Third-party imports
 import numpy as np
+import torch
+from torchmetrics import dice
 import torch.nn.functional as F
-import scipy.ndimage as ndimage
 from torch import nn
+import scipy.ndimage as ndimage
 
 
 class MatchHistogram(nn.Module):
     def __init__(self, mean=0.0, std=0.2, num_bins=256):
         """
-        Histogram Matching Module to map the intensity values of an image to follow a normal distribution.
+        Histogram Matching Module to map the intensity values of an image to
+        follow a normal distribution.
 
         Parameters
         ----------
@@ -39,7 +44,8 @@ class MatchHistogram(nn.Module):
         self.num_bins = num_bins
 
     def calculate_cdf(self, hist):
-        """Calculate the cumulative distribution function (CDF) for a histogram."""
+        """Calculate the cumulative distribution function (CDF) for a
+        histogram."""
         cdf = hist.cumsum(0)
         cdf_normalized = cdf / cdf[-1]
         return cdf_normalized
@@ -56,20 +62,24 @@ class MatchHistogram(nn.Module):
         Returns
         -------
         matched : torch.Tensor
-            The transformed source image with histogram matching a normal distribution.
+            The transformed source image with histogram matching a normal
+            distribution.
         """
         device = source.device
 
-        # Normalize the source image to the range [0, 255] for histogram computation
+        # Normalize the source image to the range [0, 255] for histogram
+        # computation
         source_normalized = ((source + 1) / 2 * 255).clamp(0, 255).long()
 
         # Compute the histogram and CDF of the source image
-        src_hist = torch.histc(source_normalized.float(), bins=self.num_bins, min=0, max=255).to(device)
+        src_hist = torch.histc(source_normalized.float(),
+                               bins=self.num_bins, min=0, max=255).to(device)
         src_cdf = self.calculate_cdf(src_hist)
 
         # Create the normal distribution CDF
         normal_values = torch.linspace(-1, 1, self.num_bins, device=device)
-        normal_cdf = torch.distributions.Normal(self.mean, self.std).cdf(normal_values)
+        normal_cdf = torch.distributions.Normal(
+            self.mean, self.std).cdf(normal_values)
         normal_cdf = normal_cdf / normal_cdf[-1]  # Normalize to range [0, 1]
 
         # Create a lookup table to map the pixel values
@@ -91,40 +101,83 @@ class MatchHistogram(nn.Module):
 
 class Options(object):
     """
-    Base class for options.
+    Base class for managing and constructing file paths based on class
+    attributes.
+
+    Attributes
+    ----------
+    cls : object
+        The class instance from which attributes are retrieved.
+    attribute_dict : dict
+        Dictionary of attributes from the class instance.
+    out_dir : str
+        Output directory for the prediction file.
+    full_path : str
+        Full file path for the prediction file.
     """
+
     def __init__(self, cls):
+        """
+        Initialize the Options class with the provided class instance.
+
+        Parameters
+        ----------
+        cls : object
+            The class instance from which attributes are retrieved.
+        """
         self.cls = cls
         self.attribute_dict = self.cls.__dict__
+        self.out_dir = None
+        self.full_path = None
 
     def out_filepath(self, dir=None):
         """
-        Determine out filename. Same dir as volume.
+        Construct the output file path based on class attributes.
+
+        Parameters
+        ----------
+        dir : str, optional
+            Directory to save the output file. If not provided, defaults to
+            'predictions' subdirectory within the class instance's volume
+            directory.
+
+        Returns
+        -------
+        tuple
+            A tuple containing the output directory and the full file path.
         """
         stem = f"{self.attribute_dict['tensor_name']}-prediction"
         stem += f"_stepsz-{self.attribute_dict['step_size']}"
-        try:
-            stem += f"_{self.attribute_dict['accuracy_name']}-{self.attribute_dict['accuracy_val']}"
-        except:
-            pass
+
+        # Add accuracy details if available
+        accuracy_name = self.attribute_dict.get('accuracy_name')
+        accuracy_val = self.attribute_dict.get('accuracy_val')
+        if accuracy_name and accuracy_val:
+            stem += f"_{accuracy_name}-{accuracy_val}"
+
         stem += '.nii.gz'
+
+        # Determine output directory
         if dir is None:
-            self.out_dir = f"/{self.attribute_dict['volume_dir']}/predictions"
+            self.out_dir = os.path.join(self.attribute_dict['volume_dir'],
+                                        'predictions')
         else:
             self.out_dir = dir
-        self.full_path = f"{self.out_dir}/{stem}"
-        return self.out_dir, self.full_path
 
+        # Construct full file path
+        self.full_path = os.path.join(self.out_dir, stem)
+
+        return self.out_dir, self.full_path
 
 
 class Thresholding(object):
     """
     Decide if and how to threshold. Perform thresholding.
     """
-    def __init__(self, prediction_tensor:torch.Tensor,
-                 ground_truth_tensor:torch.Tensor,
-                 threshold:{float, False, 'auto'}=0.5,
-                 compute_accuracy:bool=False
+    def __init__(self, prediction_tensor: torch.Tensor,
+                 ground_truth_tensor: torch.Tensor,
+                 threshold: {float, False, "auto"}=0.5,
+                 compute_accuracy: bool = False
                  ):
         """
         Parameters
@@ -147,22 +200,22 @@ class Thresholding(object):
         """
         Run thresholding.
         """
-        if self.threshold == False:
+        if self.threshold is False:
             # Return the unaltered probability map
             print("\nNot thresholding...")
             return self.prediction_tensor, None, None
         elif isinstance(self.threshold, float):
             print('\nApplying fixed threshold...')
             return self.fixedThreshold()
-        elif self.threshold == 'auto' and isinstance(self.ground_truth_tensor,
-                                                   torch.Tensor):
+        elif self.threshold == 'auto' and isinstance(
+                self.ground_truth_tensor, torch.Tensor):
             return self.autoThreshold()
         else:
             print("\nCan't do the thresholding. Check your settings")
             exit(0)
-        
 
-    def autoThreshold(self, start:float=0.05, stop:float=0.95, step:float=0.05):
+    def autoThreshold(self, start: float = 0.05, stop: float = 0.95,
+                      step: float = 0.05):
         """
         Auto threshold volume.
 
@@ -186,14 +239,14 @@ class Thresholding(object):
             accuracy_lst.append(accuracy)
 
         max_accuracy_index = accuracy_lst.index(max(accuracy_lst))
-        threshold, accuracy = threshold_lst[max_accuracy_index], accuracy_lst[max_accuracy_index]
+        threshold, accuracy = threshold_lst[max_accuracy_index],
+        accuracy_lst[max_accuracy_index]
         # Now do the actual thresholding
         self.prediction_tensor[self.prediction_tensor >= threshold] = 1
         self.prediction_tensor[self.prediction_tensor <= threshold] = 0
         threshold = round(threshold.item(), 3)
         accuracy = round(accuracy.item(), 3)
         return self.prediction_tensor, threshold, accuracy
-    
 
     def fixedThreshold(self):
         """
@@ -201,43 +254,44 @@ class Thresholding(object):
         """
         # Do a fixed threshold
         print("\nApplying a fixed threshold...")
-        self.prediction_tensor[self.prediction_tensor >= self.prediction_tensor] = 1
-        self.prediction_tensor[self.prediction_tensor <= self.prediction_tensor] = 0
-        if self.compute_accuracy == True:
-            accuracy = dice(self.prediction_tensor, self.ground_truth_tensor, multiclass=False)
+        self.prediction_tensor[
+            self.prediction_tensor >= self.prediction_tensor] = 1
+        self.prediction_tensor[
+            self.prediction_tensor <= self.prediction_tensor] = 0
+        if self.compute_accuracy is True:
+            accuracy = dice(self.prediction_tensor, self.ground_truth_tensor,
+                            multiclass=False)
             accuracy = round(accuracy.item(), 3)
-        elif self.compute_accuracy == False:
+        elif self.compute_accuracy is False:
             accuracy = None
         else:
             print("Look, do you want me to compute the accuracy or not!")
             exit(0)
         return self.prediction_tensor, self.threshold, accuracy
 
-#Thresholding()
 
 def thresholding(
-    prediction_tensor:torch.Tensor,
+    prediction_tensor: torch.Tensor,
     ground_truth_tensor=None,
-    threshold:bool=True,
-    auto_threshold:bool=True,
-    fixed_threshold:float=0.5,
-    compute_accuracy:bool=True
-    ) -> tuple:
-    
+    threshold: bool = True,
+    auto_threshold: bool = True,
+    fixed_threshold: float = 0.5,
+    compute_accuracy: bool = True
+        ) -> tuple:
+
     auto_threshold_settings = {
         "start": 0.05,
         "stop": 0.95,
-        "step": 0.05,  
+        "step": 0.05,
     }
 
-    #out_filename = f"prediction_stepsz{step_size}"
-
-    if threshold == True:
-        if auto_threshold == True:
+    if threshold is True:
+        if auto_threshold is True:
             # Decide if we can even do threshold
             if ground_truth_tensor is None:
                 # Can't threshold because there was no gt tensor
-                print("\nCan't threshold! You didn't give me a ground truth tensor!")
+                print("\nCan't threshold!"
+                      "You didn't give me a ground truth tensor!")
             elif isinstance(ground_truth_tensor, torch.Tensor):
                 # All good. Go on to auto thresholding
                 print("\nAuto thresholding...")
@@ -251,10 +305,12 @@ def thresholding(
                     temp = prediction_tensor.clone()
                     temp[temp >= thresh] = 1
                     temp[temp <= thresh] = 0
-                    accuracy = dice(temp, ground_truth_tensor, multiclass=False)
+                    accuracy = dice(temp, ground_truth_tensor,
+                                    multiclass=False)
                     accuracy_lst.append(accuracy)
                 max_index = accuracy_lst.index(max(accuracy_lst))
-                threshold, accuracy = threshold_lst[max_index], accuracy_lst[max_index]
+                threshold, accuracy = (
+                    threshold_lst[max_index], accuracy_lst[max_index])
                 # Now do the actual thresholding
                 prediction_tensor[prediction_tensor >= threshold] = 1
                 prediction_tensor[prediction_tensor <= threshold] = 0
@@ -262,92 +318,76 @@ def thresholding(
                 threshold = round(threshold.item(), 3)
                 accuracy = round(accuracy.item(), 3)
                 return prediction_tensor, threshold, accuracy
-            
-        elif auto_threshold == False:
+
+        elif auto_threshold is False:
             # Do a fixed threshold
             print("\nApplying a fixed threshold...")
             prediction_tensor[prediction_tensor >= fixed_threshold] = 1
             prediction_tensor[prediction_tensor <= fixed_threshold] = 0
-            if compute_accuracy == True:
-                accuracy = dice(prediction_tensor, ground_truth_tensor, multiclass=False)
+            if compute_accuracy is True:
+                accuracy = dice(prediction_tensor, ground_truth_tensor,
+                                multiclass=False)
                 accuracy = round(accuracy.item(), 3)
             else:
                 accuracy = None
             return prediction_tensor, fixed_threshold, accuracy
-    elif threshold == False:
+    elif threshold is False:
         # Return a prob map
         print("\nNot thresholding...")
         return prediction_tensor, None, None
 
 
-def volume_info(tensor, name=None, n:int=150, stats:bool=True, zero=False, unique=False, a:int=None, b:int=None, step:float=None):    
-    
+def volume_info(tensor, name=None, n: int = 150, stats: bool = True,
+                zero=False, unique=False, a: int = None, b: int = None,
+                step: float = None):
+
     if stats:
         if name is not None:
             print('\n')
-            print('#' * 20,f'\n{name} Info')
+            print('#' * 20, f'\n{name} Info')
             print('#' * 20)
         print("\nGeneral Volume Info:")
         print('-' * 20)
         print("  Requres grad:", tensor.requires_grad)
         print("  Shape:", list(tensor.shape))
         print("  dtype:", tensor.dtype)
-        
+
         print("\nVolume Statistics:")
         print('-' * 20)
         print(f"  Mean: {tensor.mean().item():.1e}")
         print(f"  Median: {tensor.median().item():.1e}")
         print(f"  StDev: {tensor.std().item():.1e}")
-        print(f"  Range: [{tensor.min().item():.1e}, {tensor.max().item():.1e}]")
+        print(
+            f"  Range: [{tensor.min().item():.1e}, {tensor.max().item():.1e}]")
         # Quantiles
-        print("2nd Percentile:", round(torch.quantile(tensor, 0.02).item(), 3))
-        print("25th Percentile:", round(torch.quantile(tensor, 0.25).item(), 3))
-        print("75th Percentile:", round(torch.quantile(tensor, 0.75).item(), 3))
-        print("98th Percentile:", round(torch.quantile(tensor, 0.98).item(), 3))
-
-    #img = tensor.to('cpu').numpy().squeeze()
-    #if a is None:
-    #    a = pymath.floor(img.min())
-    #if b is None:
-    #    b = pymath.ceil(img.max()) + 2
-    #if step is None:
-    #    step = 1
-
-    #if unique:
-    #    print(np.unique(img))
-    #else:
-    #    pass
-
-    # Histogram
-    #frequency, intensity = np.histogram(img, bins=np.arange(a, b, step))
-    # Figure
-    #plt.figure()
-    #f, axarr = plt.subplots(1, 2, figsize=(15, 8), constrained_layout=True)
-    #axarr = axarr.flatten()
-    #axarr[0].imshow(img[n], cmap='gray')
-    #axarr[1].bar(intensity[:-1], frequency, width=0.1)
+        print("2nd Percentile:",
+              round(torch.quantile(tensor, 0.02).item(), 3))
+        print("25th Percentile:",
+              round(torch.quantile(tensor, 0.25).item(), 3))
+        print("75th Percentile:",
+              round(torch.quantile(tensor, 0.75).item(), 3))
+        print("98th Percentile:",
+              round(torch.quantile(tensor, 0.98).item(), 3))
 
 
 class PathTools(object):
     """
     Class to handle paths.
     """
-    def __init__(self, path:str):
+    def __init__(self, path: str):
         """
         Parameters
         ----------
         path : str
-            Path to deal with. 
+            Path to deal with.
         """
         self.path = path
-
 
     def destroy(self):
         """
         Delete all files and subdirectories.
         """
         shutil.rmtree(path=self.path, ignore_errors=True)
-
 
     def makeDir(self):
         """
@@ -359,9 +399,8 @@ class PathTools(object):
             try:
                 self.destroy()
                 os.makedirs(self.path)
-            except:
-                pass
-    
+            except OSError as e:
+                print(f"Error creating directory {self.path}: {e}")
 
     def patternRemove(self, pattern):
         """
@@ -381,8 +420,9 @@ class PathTools(object):
                 [os.remove(hit) for hit in glob.glob(
                     expression, recursive=True
                     )]
-            except:
-                pass
+            except Exception as e:
+                print(f'Error removing path: {e}')
+
 
 class JsonTools(object):
     """
@@ -396,7 +436,7 @@ class JsonTools(object):
             Path to json file.
         """
         self.path = path
-    
+
     def log(self, dict):
         """
         Save Python dictionary as json file.
@@ -418,7 +458,7 @@ class JsonTools(object):
         f = open(self.path)
         dic = json.load(f)
         return dic
-    
+
 
 class Checkpoint(object):
     """
@@ -436,7 +476,8 @@ class Checkpoint(object):
 
     def best(self):
         """
-        Return the first checkpoint that includes 'epoch=' in its filename, or None if no such file exists.
+        Return the first checkpoint that includes 'epoch=' in its filename, or
+        None if no such file exists.
 
         Returns
         -------
@@ -472,12 +513,14 @@ class Checkpoint(object):
         Returns
         -------
         str or None
-            The path to the requested checkpoint, or None if no suitable checkpoint exists.
+            The path to the requested checkpoint, or None if no suitable
+            checkpoint exists.
         """
         if type == 'best':
             return self.best()
         elif type == 'last':
             return self.last()
+
 
 def delete_folder(path):
     """
@@ -510,7 +553,7 @@ def stretch_contrast(tensor: torch.Tensor, multiplier=1.5) -> torch.Tensor:
 
     """
     mean = torch.mean(tensor)
-    std_dev = torch.std(tensor)
+    # std_dev = torch.std(tensor)
     # Adjust the contrast multiplier based on desired stretching
     stretched_tensor = mean + multiplier * (tensor - mean)
     # Clip the values to maintain the range between -1 and 1
@@ -521,24 +564,27 @@ def stretch_contrast(tensor: torch.Tensor, multiplier=1.5) -> torch.Tensor:
 def get_gaussian_window(tensor_shape=(64, 64, 64), sigma=2):
     # Create a 64^3 patch with values initialized to 1
     patch = torch.ones(tensor_shape, dtype=torch.float32)
-    
+
     # Create Gaussian window along each dimension
     x = torch.linspace(-1, 1, tensor_shape[0])
     y = torch.linspace(-1, 1, tensor_shape[1])
     z = torch.linspace(-1, 1, tensor_shape[2])
-    
+
     x_gaussian = torch.exp(-0.5 * (x / sigma) ** 2)
     y_gaussian = torch.exp(-0.5 * (y / sigma) ** 2)
     z_gaussian = torch.exp(-0.5 * (z / sigma) ** 2)
-    
+
     # Create a 3D Gaussian window
-    window = x_gaussian.view(-1, 1, 1) * y_gaussian.view(1, -1, 1) * z_gaussian.view(1, 1, -1)
-    
+    window = (x_gaussian.view(-1, 1, 1)
+              * y_gaussian.view(1, -1, 1)
+              * z_gaussian.view(1, 1, -1))
+
     # Apply the window to the patch
     attenuated_patch = patch * window
 
-    attenuated_patch = torch.stack((attenuated_patch, attenuated_patch, attenuated_patch), dim=0)
-    
+    attenuated_patch = torch.stack((attenuated_patch, attenuated_patch,
+                                    attenuated_patch), dim=0)
+
     return attenuated_patch.cuda()
 
 
@@ -547,6 +593,7 @@ def normalize(t):
     max_val = torch.max(t)
     normalized_tensor = 2 * (t - min_val) / (max_val - min_val) - 1
     return normalized_tensor
+
 
 def scale_tensor(tensor, min_target=0.1, max_target=1):
     min_val = torch.min(tensor)
@@ -557,27 +604,28 @@ def scale_tensor(tensor, min_target=0.1, max_target=1):
     scaled_tensor = min_target + normalized_tensor * (max_target - min_target)
     return scaled_tensor
 
+
 def inject_noise(tensor, noise_factor=0.1):
     """
     Injects random noise into a 3D tensor.
-    
+
     Parameters:
     tensor (torch.Tensor): The input tensor to which noise will be added.
     noise_factor (float): The factor by which the noise will be scaled.
-    
+
     Returns:
     torch.Tensor: The tensor with added noise.
     """
     # Ensure the input tensor is a 3D tensor
     if tensor.dim() != 4:
         raise ValueError("Input tensor must be 3-dimensional")
-    
+
     # Generate random noise
     noise = 1 + torch.randn_like(tensor)
-    
+
     # Scale the noise and add it to the input tensor
     noisy_tensor = tensor + noise_factor * noise
-    
+
     return noisy_tensor
 
 
@@ -622,7 +670,7 @@ class FullPredict:
         self.num_patches = len(self.complete_patch_coords)
 
     def predict(self, gaussian_sigma=10):
-        sys.stdout.write(f'\rNow Predicting.')
+        sys.stdout.write('\rNow Predicting.')
         sys.stdout.flush()
         for i in self.complete_patch_coords:
             in_tensor = self.tensor[i].unsqueeze(0).unsqueeze(0).to(
@@ -659,7 +707,8 @@ class FullPredict:
 
     def _reformat_imprint_tensor(self):
         if self._got_padded:
-            self.imprint_tensor = self.imprint_tensor[:, :, 
+            self.imprint_tensor = self.imprint_tensor[
+                :, :,
                 self.patch_size:-self.patch_size,
                 self.patch_size:-self.patch_size,
                 self.patch_size:-self.patch_size
