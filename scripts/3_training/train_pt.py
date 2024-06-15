@@ -1,18 +1,14 @@
 import os
 import json
-import glob
 import torch
 import traceback
 from torch.utils.data import DataLoader, Dataset, random_split
 from torch.utils.tensorboard import SummaryWriter
 import nibabel as nib
-from vesselseg.vesselseg import networks, losses
-from veritas.unet import (UNet, WarmupLR, ConstantLR, CooldownLR,
-                          ChainedLRScheduler, FocalTverskyLoss3D,
-                          NoBgFocalTverskyLoss)
-from veritas.utils import delete_folder, MatchHistogram
+from vesselseg.vesselseg import losses
+from veritas.unet import UNet
+from veritas.utils import delete_folder
 from veritas.confocal import ConfocalVesselLabelTransform, VesselLabelDataset
-from veritas.synth import SanityCheckDataset
 
 
 def save_checkpoint(state, filename="checkpoint.pth.tar"):
@@ -36,35 +32,9 @@ class SegmentationDataset(Dataset):
         return x, y
 
 
-class SanityCheckDataset(Dataset):
-
-    def __init__(self):
-        path = ('/autofs/cluster/octdata2/users/epc28/veritas/output/'
-                'synthetic_data/sanity_check_synthvols')
-        self.x_paths = sorted(glob.glob(f'{path}/x/*'))
-        self.y_paths = sorted(glob.glob(f'{path}/y/*'))
-
-    def __len__(self):
-        return len(self.x_paths)
-
-    def __getitem__(self, idx):
-        x = torch.load(self.x_paths[idx]).to('cuda')
-        y = torch.load(self.y_paths[idx]).to('cuda')
-        return x, y
-
-
-def worker_init_fn(worker_id):
-    """Initialize each worker with its own CUDA context."""
-    torch.cuda.init()
-
-
 def load_data(transform, data_path, subset=-1, batch_size=1, train_split=0.8,
               seed=42):
-    # label_paths = f"{data_path}/*label*"
-    # label_paths = sorted(glob.glob(label_paths))[:subset]
-
     dataset = VesselLabelDataset(3, transform=transform)
-    # dataset = SanityCheckDataset()
     train_size = int(train_split * len(dataset))
     val_size = len(dataset) - train_size
     train_set, val_set = random_split(
@@ -85,34 +55,17 @@ def train_model(
         device='cuda'):
 
     try:
-        # optimizer = torch.optim.Adam(
-        #    model.parameters(), lr, weight_decay=weight_decay)
         optimizer = torch.optim.NAdam(
             model.parameters(), lr, weight_decay=weight_decay
         )
+
         criterion_ = losses.DiceLoss(
            weighted=False, activation=torch.nn.Softmax(dim=1))
-        # criterion_ = FocalTverskyLoss3D(smooth=0.0000001)
+
         writer = SummaryWriter(model_dir)
         sample_inputs, _ = next(iter(train_loader))
         writer.add_graph(
             model, sample_inputs.to(next(model.parameters()).device))
-
-        # epoch_steps = len(train_loader)
-        # warmup_scheduler = WarmupLR(
-        #    optimizer,
-        #    warmup_steps=(epoch_steps * warmup_epochs),
-        #    start_lr=1e-10, end_lr=lr)
-        # constant_scheduler2 = ConstantLR(
-        #    optimizer,
-        #    constant_steps=(epoch_steps * begin_cooldown_epoch), lr=lr)
-        # cooldown_scheduler = CooldownLR(
-        #    optimizer,
-        #    cooldown_steps=(epoch_steps * 100), start_lr=lr, end_lr=1e-6)
-        # scheduler = ChainedLRScheduler(
-        #    optimizer,
-        #    schedulers=[
-        #        warmup_scheduler, constant_scheduler2, cooldown_scheduler])
 
         best_vloss = 1
         for epoch in range(num_epochs):
@@ -126,7 +79,6 @@ def train_model(
                 loss = criterion_(outputs, labels)
                 loss.backward()
                 optimizer.step()
-                # scheduler.step()
                 running_loss += loss.item() * inputs.size(0)
 
                 print(
