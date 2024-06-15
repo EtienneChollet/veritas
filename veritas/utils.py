@@ -679,6 +679,7 @@ class FullPredict:
             in_tensor /= in_tensor.max()
             in_tensor *= 2
             in_tensor -= 1
+            in_tensor = MatchHistogram(std=0.1)(in_tensor)
             prediction = self.predictor.predict_tensor(in_tensor).to(
                 torch.float32) * get_gaussian_window(sigma=gaussian_sigma)
             prediction = F.softmax(prediction, dim=1)
@@ -723,3 +724,29 @@ class FullPredict:
                                               mode=self.padding)
         self.tensor = self.tensor.squeeze()
         self._got_padded = True
+
+
+def save_config_to_json(config, model_dir, filename="config.json"):
+    """Save configuration dictionary to a JSON file.
+
+    Parameters
+    ----------
+    config : dict
+        Configuration dictionary containing all the parameters.
+    filename : str
+        Name of the file where the JSON data will be saved.
+
+    """
+    try:
+        delete_folder(model_dir)
+    except Exception as e:
+        print(f"Warning: {e}")
+
+    os.makedirs(model_dir, exist_ok=True)
+    os.makedirs(f'{model_dir}/checkpoints')
+    with open(f'{model_dir}/{filename}', 'w') as f:
+        json.dump(config, f, indent=4)
+
+def save_checkpoint(state, filename="checkpoint.pth.tar"):
+    """Save checkpoint to disk."""
+    torch.save(state, filename)

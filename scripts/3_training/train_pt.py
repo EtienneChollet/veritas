@@ -1,5 +1,3 @@
-import os
-import json
 import torch
 import traceback
 from torch.utils.data import DataLoader, Dataset, random_split
@@ -7,13 +5,8 @@ from torch.utils.tensorboard import SummaryWriter
 import nibabel as nib
 from vesselseg.vesselseg import losses
 from veritas.unet import UNet
-from veritas.utils import delete_folder
+from veritas.utils import save_config_to_json, save_checkpoint
 from veritas.confocal import ConfocalVesselLabelTransform, VesselLabelDataset
-
-
-def save_checkpoint(state, filename="checkpoint.pth.tar"):
-    """Save checkpoint to disk."""
-    torch.save(state, filename)
 
 
 class SegmentationDataset(Dataset):
@@ -140,28 +133,6 @@ def train_model(
         print("Training completed and CUDA memory cleaned up")
     writer.close()
     return model
-
-
-def save_config_to_json(config, model_dir, filename="config.json"):
-    """Save configuration dictionary to a JSON file.
-
-    Parameters
-    ----------
-    config : dict
-        Configuration dictionary containing all the parameters.
-    filename : str
-        Name of the file where the JSON data will be saved.
-
-    """
-    try:
-        delete_folder(model_dir)
-    except Exception as e:
-        print(f"Warning: {e}")
-
-    os.makedirs(model_dir, exist_ok=True)
-    os.makedirs(f'{model_dir}/checkpoints')
-    with open(f'{model_dir}/{filename}', 'w') as f:
-        json.dump(config, f, indent=4)
 
 
 def main():
