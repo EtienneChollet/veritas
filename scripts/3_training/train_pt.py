@@ -1,15 +1,33 @@
 import torch
 import traceback
-from torch.utils.data import DataLoader, Dataset, random_split
-from torch.utils.tensorboard import SummaryWriter
+from torch.utils.data import Dataset
 import nibabel as nib
-from vesselseg.vesselseg import losses
-from veritas.unet import UNet
-from veritas.utils import save_config_to_json, save_checkpoint
-from veritas.confocal import ConfocalVesselLabelTransform, VesselLabelDataset
+from veritas.unet import (
+    UNet,
+    get_loaders,
+    configure_optimizer,
+    configure_criterion,
+    log_model_graph,
+    train_one_epoch,
+    validate,
+    log_hist
+)
+from veritas.utils import save_config_to_json
+from veritas.confocal import ConfocalVesselLabelTransform
 
 
 class SegmentationDataset(Dataset):
+    """
+    Custom Dataset for loading segmentation labels.
+
+    Parameters
+    ----------
+    label_paths : list
+        List of paths to the label files.
+    transform : callable, optional
+        A function/transform that takes in a label and returns a transformed
+        version.
+    """
     def __init__(self, label_paths, transform=None):
         self.label_paths = label_paths
         self.transform = transform
@@ -25,105 +43,30 @@ class SegmentationDataset(Dataset):
         return x, y
 
 
-def load_data(transform, data_path, subset=-1, batch_size=1, train_split=0.8,
-              seed=42):
-    dataset = VesselLabelDataset(3, transform=transform)
-    train_size = int(train_split * len(dataset))
-    val_size = len(dataset) - train_size
-    train_set, val_set = random_split(
-        dataset, [train_size, val_size],
-        generator=torch.Generator().manual_seed(seed))
-    train_loader = DataLoader(
-        train_set, batch_size=batch_size, shuffle=True)
-    print('LOADED DATALOADER')
-    val_loader = DataLoader(
-        val_set, batch_size=1, shuffle=False)
-    return train_loader, val_loader
-
-
 def train_model(
-        model, train_loader, val_loader, num_epochs=25, warmup_epochs=2,
-        begin_cooldown_epoch=500, lr=0.001,
-        model_dir='runs/yibei_semantic_yael', weight_decay=1e-5,
+        model, train_loader, val_loader, num_epochs=25, lr=0.001,
+        model_dir='runs/base', weight_decay=1e-5,
         device='cuda'):
 
+    best_vloss = 1.0
+
     try:
-        optimizer = torch.optim.NAdam(
-            model.parameters(), lr, weight_decay=weight_decay
-        )
+        optimizer = configure_optimizer(model, lr, weight_decay)
+        criterion_ = configure_criterion()
+        writer = log_model_graph(model_dir, model, train_loader)
 
-        criterion_ = losses.DiceLoss(
-           weighted=False, activation=torch.nn.Softmax(dim=1))
-
-        writer = SummaryWriter(model_dir)
-        sample_inputs, _ = next(iter(train_loader))
-        writer.add_graph(
-            model, sample_inputs.to(next(model.parameters()).device))
-
-        best_vloss = 1
         for epoch in range(num_epochs):
-            model.train()
-            running_loss = 0.0
+            # model, epoch, writer, loader, opt, criterion
+            train_one_epoch(
+                model, epoch, writer, train_loader, criterion_, optimizer,
+                device)
 
-            for i, (inputs, labels) in enumerate(train_loader):
-                optimizer.zero_grad()
-                inputs, labels = inputs.to(device), labels.to(device).float()
-                outputs = model(inputs)
-                loss = criterion_(outputs, labels)
-                loss.backward()
-                optimizer.step()
-                running_loss += loss.item() * inputs.size(0)
+            best_vloss = validate(
+                model, epoch, writer, val_loader, optimizer, criterion_,
+                device, best_vloss, model_dir)
 
-                print(
-                    f"E-{epoch}, I-{i}, Loss: {loss.item()}",
-                    end='\r', flush=True)
+            log_hist(model, epoch, writer)
 
-                if i % 10 == 0:
-                    writer.add_scalar(
-                        'training_loss',
-                        loss.item(),
-                        epoch * len(train_loader) + i)
-                    writer.add_scalar(
-                        'learning_rate',
-                        optimizer.param_groups[0]['lr'],
-                        epoch * len(train_loader) + i)
-
-            epoch_loss = running_loss / len(train_loader.dataset)
-            writer.add_scalar('epoch_loss', epoch_loss, epoch)
-            print(f'Epoch {epoch+1}/{num_epochs}, Loss: {epoch_loss:.4f}')
-
-            # Validation Loop
-            running_vloss = 0.0
-            model.eval()
-            with torch.no_grad():
-                for i, (vinputs, vlabels) in enumerate(val_loader):
-                    vinputs, vlabels = vinputs.to(device), vlabels.to(device)
-                    voutputs = model(vinputs)
-                    vloss = criterion_(voutputs, vlabels)
-                    running_vloss += vloss.item()
-
-            avg_vloss = running_vloss / len(val_loader)
-            writer.add_scalar('val_loss', avg_vloss, epoch)
-
-            if avg_vloss < best_vloss:
-                best_vloss = avg_vloss
-                print(f"New best val_loss: {best_vloss}")
-                save_checkpoint({
-                    'epoch': epoch + 1,
-                    'state_dict': model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                }, filename=(
-                    f'{model_dir}/checkpoints/'
-                    f'checkpoint_epoch_{epoch+1}_val-{avg_vloss}.pth.tar')
-                    )
-
-            # Add histogram stuff
-            # Optionally log parameter histograms and gradients
-            if (epoch + 1) % 10 == 0:
-                for name, param in model.named_parameters():
-                    writer.add_histogram(name, param, epoch)
-                    if param.grad is not None:
-                        writer.add_histogram(f'{name}.grad', param.grad, epoch)
     except Exception as e:
         print("An error occurred:", str(e))
         traceback.print_exc()
@@ -138,7 +81,7 @@ def train_model(
 def main():
 
     #####################################################
-    model_dir = 'runs/base/version_9'
+    model_dir = 'runs/base/version_10'
     #####################################################
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -147,11 +90,9 @@ def main():
 
     training_config = {
         "num_epochs": 10000,
-        "warmup_epochs": 2,
-        "begin_cooldown_epoch": 100,
         "model_dir": model_dir,
         "lr": 0.001,
-        'weight_decay': 1e-9,  # 1e-9
+        'weight_decay': 1e-5,  # 1e-9
     }
 
     model_config = {
@@ -160,11 +101,9 @@ def main():
     }
 
     data_config = {
-        "data_path": ("/autofs/cluster/octdata2/users/epc28/veritas/output/"
-                      "synthetic_data/exp0001"),
-        "subset": -1,
+        "subset": 20,
         "train_split": 0.8,
-        "batch_size": 5,
+        "batch_size": 3,
     }
 
     transform_config = {
@@ -180,10 +119,6 @@ def main():
         'verbose': False
         }
 
-    vsynth = {
-        'min_difference': 0.1
-    }
-
     # Combine all configurations into one dictionary
     config = {
         "notes": notes,
@@ -192,16 +127,12 @@ def main():
         "training": training_config,
         "model": model_config,
         "data": data_config,
-        "synth_config": {
-            'vessels': vsynth,
-            'parenchyma': transform_config
-        }
     }
 
     # Save the configuration to a JSON file
     save_config_to_json(config, model_dir)
     transform = ConfocalVesselLabelTransform(**config['transform'])
-    train_loader, val_loader = load_data(transform, **config['data'])
+    train_loader, val_loader = get_loaders(transform, **config['data'])
     model = UNet(1, **config['model']).to('cuda')
     train_model(model, train_loader, val_loader, **config['training'])
 
