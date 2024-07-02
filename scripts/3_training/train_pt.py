@@ -1,7 +1,6 @@
 import torch
 import traceback
-from torch.utils.data import Dataset
-import nibabel as nib
+
 from veritas.unet import (
     UNet,
     get_loaders,
@@ -10,37 +9,10 @@ from veritas.unet import (
     log_model_graph,
     train_one_epoch,
     validate,
-    log_hist
+    log_hist,
 )
 from veritas.utils import save_config_to_json
 from veritas.confocal import ConfocalVesselLabelTransform
-
-
-class SegmentationDataset(Dataset):
-    """
-    Custom Dataset for loading segmentation labels.
-
-    Parameters
-    ----------
-    label_paths : list
-        List of paths to the label files.
-    transform : callable, optional
-        A function/transform that takes in a label and returns a transformed
-        version.
-    """
-    def __init__(self, label_paths, transform=None):
-        self.label_paths = label_paths
-        self.transform = transform
-
-    def __len__(self):
-        return len(self.label_paths)
-
-    def __getitem__(self, idx):
-        labels = torch.from_numpy(
-            nib.load(self.label_paths[idx]).get_fdata()).to(torch.float32)
-        x, y = self.transform(labels)
-        x = x.unsqueeze(0)  # Add channel dimension
-        return x, y
 
 
 def train_model(
@@ -52,9 +24,9 @@ def train_model(
 
     try:
         optimizer = configure_optimizer(model, lr, weight_decay)
-        criterion_ = configure_criterion()
         writer = log_model_graph(model_dir, model, train_loader)
-
+        # criterion_ = configure_criterion(_type='dice', weighted=True)
+        criterion_ = configure_criterion(_type='dice')
         for epoch in range(num_epochs):
             # model, epoch, writer, loader, opt, criterion
             train_one_epoch(
@@ -81,18 +53,18 @@ def train_model(
 def main():
 
     #####################################################
-    model_dir = 'runs/base/version_10'
+    model_dir = 'runs/base/version_12'
     #####################################################
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    notes = "Trained using normalization between -1 and 1"
+    notes = "Same as 11 but no gaussian blurring and increased light range"
 
     training_config = {
         "num_epochs": 10000,
         "model_dir": model_dir,
-        "lr": 0.001,
-        'weight_decay': 1e-5,  # 1e-9
+        "lr": 0.01,
+        'weight_decay': 1e-12,  # 1e-5
     }
 
     model_config = {
@@ -101,21 +73,19 @@ def main():
     }
 
     data_config = {
-        "subset": 20,
+        "subset": 100,
         "train_split": 0.8,
-        "batch_size": 3,
+        "batch_size": 5,
     }
 
     transform_config = {
         'vessel_type': 'light',
-        'light_range': [1.75, 5],
-        'balls_range': [1.75, 5],
         'balls_xy': [True, True],
-        'gaussian_blurring': [0, 1],
+        'gaussian_blurring': [0, 2],
         'bg_class_range': [3, 10],
-        'noise_sigma': 1,
+        'noise_sigma': 0.25,
         'contrast_range': False,
-        'max_num_blobs': 20,
+        'max_num_blobs': 50,
         'verbose': False
         }
 

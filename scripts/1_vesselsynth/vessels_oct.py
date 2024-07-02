@@ -7,6 +7,6 @@ backend.jitfields = True
 if __name__ == "__main__":
     torch.no_grad()
     VesselSynth(
-        experiment_number=1,
-        device='cuda'
+        experiment_number=7,
+        device='cpu'
         ).synth()
