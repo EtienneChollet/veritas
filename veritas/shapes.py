@@ -258,13 +258,11 @@ class EllipsoidSampler(nn.Module):
 #    axes_range = (5, 15)
 #    label_range = (1, 255)#
 
-#    ellipsoid_sampler = EllipsoidSampler(volume_size, num_ellipsoids, axes_range, label_range)
+#    ellipsoid_sampler = EllipsoidSampler(volume_size, num_ellipsoids,
+#    axes_range, label_range)
 #    volume = ellipsoid_sampler()
 #    print(volume.shape)
 
-
-import torch
-import torch.nn as nn
 
 class AngularBlobbySampler(nn.Module):
     """
@@ -294,8 +292,8 @@ class AngularBlobbySampler(nn.Module):
 
     def forward(self):
         """
-        Generates a volume with randomly sampled angular blobby shapes with irregular edges
-        and no overlapping blobs.
+        Generates a volume with randomly sampled angular blobby shapes with
+        irregular edges and no overlapping blobs.
 
         Returns
         -------
@@ -345,10 +343,12 @@ class AngularBlobbySampler(nn.Module):
                 torch.arange(height, device=self.device) - center[1],
                 torch.arange(width, device=self.device) - center[2],
                 indexing='ij')
-            
-            # Use a Perlin-like noise function to create more blobby shapes with angular edges
-            noise_scale = 1  # Control the "blobbiness"
-            noise = torch.normal(0, noise_scale, size=z.size(), device=self.device)
+
+            # Use a Perlin-like noise function to create more blobby shapes
+            # with angular edges
+            noise_scale = 0.25  # Control the "blobbiness"
+            noise = torch.normal(0, noise_scale, size=z.size(),
+                                 device=self.device)
 
             # Create angular edges by adding a term that introduces sharpness
             # [0.75, 3]
@@ -356,7 +356,7 @@ class AngularBlobbySampler(nn.Module):
             mask = ((torch.abs(z / (axes[0] + noise)) ** sharpness +
                      torch.abs(y / (axes[1] + noise)) ** sharpness +
                      torch.abs(x / (axes[2] + noise)) ** sharpness) <= 1)
-            
+
             label_value = Uniform(*self.label_range)()
             volume = volume.to(torch.float32)
             volume[mask] = label_value
@@ -373,3 +373,302 @@ class AngularBlobbySampler(nn.Module):
 #    blobby_sampler = AngularBlobbySampler(volume_size, num_blobs, axes_range, label_range)
 #    volume = blobby_sampler()
 #    print(volume.shape)
+
+
+class BlobSampler(nn.Module):
+    def __init__(self, axis_length_range=[3, 6], intensity_range=[1.1, 5],
+                 max_blobs=25, max_sharpness=3, device='cuda', shape=64):
+        super(BlobSampler, self).__init__()
+        self.axis_length_range = axis_length_range
+        self.intensity_range = intensity_range
+        self.device = device
+        self.shape = [shape, shape, shape]
+        self.depth, self.height, self.width = self.shape
+        self.n_blobs = RandInt(1, max_blobs)()
+        self.max_sharpness = max_sharpness
+        self.imprint_tensor = torch.zeros(self.shape, dtype=torch.float32,
+                                          device=self.device)
+
+    def sample_axis_lengths(self):
+        """
+        Define blob shape/size by sampling the length for each axis.
+
+        Returns
+        -------
+        axis_lengths : torch.Tensor([int, int, int])
+            List of lengths for each of the blob's axes.
+        """
+        axis_lengths = torch.randint(
+            self.axis_length_range[0],
+            self.axis_length_range[1] + 1,
+            (3,),
+            device=self.device)
+        return axis_lengths
+
+    def sample_centroid_coords(self, axis_lengths):
+        """
+        Define centroid coordinates within parent tensor.
+
+        Parameters
+        ----------
+        axis_lengths : list
+            List of lengths for each of the blob's axes.
+
+        Returns
+        -------
+        centroid_coords : list
+            List of coordinates for centroid.
+        """
+        centroid_coords = (
+            torch.randint(
+                axis_lengths[0],
+                self.depth - axis_lengths[0],
+                (1,), device=self.device).item(),
+            torch.randint(
+                axis_lengths[1],
+                self.height - axis_lengths[1],
+                (1,), device=self.device).item(),
+            torch.randint(
+                axis_lengths[2],
+                self.width - axis_lengths[2],
+                (1,), device=self.device).item()
+            )
+        return centroid_coords
+
+
+    def check_overlap(self, axis_lengths, centroid_coords, axes_list=[],
+                      centers=[]):
+        """
+        Check if incoming (querying) blob will overlap with existing ones.
+        Parameters
+        ----------
+        axis_lengths : list
+            Axis lengths for incoming blob.
+        centroid_coords : list
+            Coordinates for centroid of incoming blob.
+        axes_list : list, optional
+            Preexisting axes, by default []
+        centers : list, optional
+            Preexisting centroid coordinates, by default []
+        Returns
+        -------
+        overlap_exists : bool
+            Bool if overlap exists or not
+        """
+        overlap_exists = False
+        # Iterate through all existing centroid-coordinate and axes-length 
+        # pairs.
+        for c, a in zip(centers, axes_list):
+            # Calculate distance to the centroid coordinate of querying blob.
+            distance = torch.sqrt(
+                torch.tensor((centroid_coords[0] - c[0]) ** 2
+                             + (centroid_coords[1] - c[1]) ** 2
+                             + (centroid_coords[2] - c[2]) ** 2,
+                             device=self.device)
+            )
+            # Overlap defined as blobs whose largest dimensions overlap/touch.
+            if distance < max(a) + max(axis_lengths):
+                overlap_exists = True
+                break  # Exit loop if any overlap is found
+        return overlap_exists
+
+    def sample_nonoverlapping_geometries(self):
+        """
+        Sample non-overlapping geometries for blobs.
+
+        Returns
+        -------
+        centers : list
+            List of centroid coordinates for each blob.
+        axes_list : list
+            List of axis lengths for each blob.
+        """
+        centers = []
+        axes_list = []
+
+        while len(centers) < self.n_blobs:
+            # Sample incoming blob's axes lengths.
+            axis_lengths = self.sample_axis_lengths()
+            # Sample incoming blob's centroid coordinates.
+            centroid_coords = self.sample_centroid_coords(axis_lengths)
+            # Check for overlaps between incoming blob and preexisting ones.
+            overlap_exists = self.check_overlap(axis_lengths, centroid_coords,
+                                                axes_list, centers)
+            # If no overlap exists, add this blob's info to the lists.
+            if not overlap_exists:
+                centers.append(centroid_coords)
+                axes_list.append(axis_lengths.tolist())
+
+        return centers, axes_list
+
+    def _meshgrid_origin_at_centroid(self, center_coords):
+        meshgrid = torch.meshgrid(
+            torch.arange(self.depth, device=self.device) - center_coords[0],
+            torch.arange(self.height, device=self.device) - center_coords[1],
+            torch.arange(self.width, device=self.device) - center_coords[2],
+            indexing='ij')
+        return meshgrid
+
+    def _add_noise_to_axes(self, axes: list, noise_scale: float = 0.5):
+        noise = torch.normal(0, noise_scale,
+                             size=[self.depth, self.height, self.width],
+                             device=self.device)
+        axes[0] += noise
+        axes[1] += noise
+        axes[2] += noise
+        return axes
+
+    def _make_shape_prob(self, meshgrid: list, axes: list):
+        sharpness = Uniform(0.75, self.max_sharpness)()
+        shape_prob = (torch.abs(meshgrid[0] / (axes[0])) ** sharpness +
+                      torch.abs(meshgrid[1] / (axes[1])) ** sharpness +
+                      torch.abs(meshgrid[2] / (axes[2])) ** sharpness
+                      )
+        return shape_prob
+
+    def _make_shape_from_prob(self, shape_prob):
+        label_value = Uniform(*self.intensity_range)()
+        mask = (shape_prob <= 1).to(torch.float32)
+        mask *= label_value
+        return mask
+
+    def make_shapes(self):
+        centers, axes_list = self.sample_nonoverlapping_geometries()
+        for center, axes in zip(centers, axes_list):
+            meshgrid = self._meshgrid_origin_at_centroid(center)
+            axes = self._add_noise_to_axes(axes)
+            shape_prob = self._make_shape_prob(meshgrid, axes)
+            shape = self._make_shape_from_prob(shape_prob)
+            self.imprint_tensor[shape > 0] = shape[shape > 0]
+        return self.imprint_tensor
+
+
+class MultiLobedBlobSampler(nn.Module):
+    def __init__(self, axis_length_range=[3, 6],
+                 max_blobs=20, sharpness=3, max_jitter: float = 0.5,
+                 num_lobes_range=[1, 5], 
+                 device='cuda', shape=64):
+        super(MultiLobedBlobSampler, self).__init__()
+        self.axis_length_range = axis_length_range
+        self.device = device
+        self.shape = [shape, shape, shape]
+        self.depth, self.height, self.width = self.shape
+        self.n_blobs = torch.randint(1, max_blobs + 1, (1,)).item()
+        self.sharpness = sharpness
+        self.max_jitter = max_jitter
+        self.num_lobes_range = num_lobes_range
+        self.imprint_tensor = torch.zeros(self.shape, dtype=torch.float32,
+                                          device=self.device)
+        self.current_label = 1
+
+    def forward(self):
+        return self.make_shapes()
+
+    def sample_axis_lengths(self):
+        axis_lengths = torch.randint(
+            self.axis_length_range[0],
+            self.axis_length_range[1] + 1,
+            (3,),
+            device=self.device)
+        return axis_lengths
+
+    def sample_centroid_coords(self, axis_lengths):
+        centroid_coords = (
+            torch.randint(
+                axis_lengths[0],
+                self.depth - axis_lengths[0],
+                (1,), device=self.device).item(),
+            torch.randint(
+                axis_lengths[1],
+                self.height - axis_lengths[1],
+                (1,), device=self.device).item(),
+            torch.randint(
+                axis_lengths[2],
+                self.width - axis_lengths[2],
+                (1,), device=self.device).item()
+            )
+        return centroid_coords
+
+    def check_overlap(self, axis_lengths, centroid_coords, axes_list=[],
+                      centers=[]):
+        overlap_exists = False
+        for c, a in zip(centers, axes_list):
+            distance = torch.sqrt(
+                torch.tensor((centroid_coords[0] - c[0]) ** 2
+                             + (centroid_coords[1] - c[1]) ** 2
+                             + (centroid_coords[2] - c[2]) ** 2,
+                             device=self.device)
+            )
+            if distance < max(a) + max(axis_lengths):
+                overlap_exists = True
+                break
+        return overlap_exists
+
+    def sample_nonoverlapping_geometries(self):
+        centers = []
+        axes_list = []
+
+        while len(centers) < self.n_blobs:
+            axis_lengths = self.sample_axis_lengths()
+            centroid_coords = self.sample_centroid_coords(axis_lengths)
+            overlap_exists = self.check_overlap(axis_lengths, centroid_coords,
+                                                axes_list, centers)
+            if not overlap_exists:
+                centers.append(centroid_coords)
+                axes_list.append(axis_lengths.tolist())
+
+        return centers, axes_list
+
+    def _meshgrid_origin_at_centroid(self, center_coords):
+        meshgrid = torch.meshgrid(
+            torch.arange(self.depth, device=self.device) - center_coords[0],
+            torch.arange(self.height, device=self.device) - center_coords[1],
+            torch.arange(self.width, device=self.device) - center_coords[2],
+            indexing='ij')
+        return meshgrid
+
+    def _make_lobe_prob(self, meshgrid, axis_lengths):
+        if isinstance(self.sharpness, float):
+            sharpness = Uniform(0.75, self.sharpness)()
+        elif isinstance(self.sharpness, list):
+            sharpness = Uniform(*self.sharpness)()
+
+        noise = torch.normal(0, self.max_jitter,
+                             size=[self.depth, self.height, self.width],
+                             device=self.device)
+        lobe_prob = (torch.abs(meshgrid[0] / (axis_lengths[0] + noise)) ** sharpness +
+                     torch.abs(meshgrid[1] / (axis_lengths[1] + noise)) ** sharpness +
+                     torch.abs(meshgrid[2] / (axis_lengths[2] + noise)) ** sharpness)
+        return lobe_prob
+
+    def _make_lobe_from_prob(self, lobe_prob):
+        # label_value = Uniform(*self.intensity_range)()
+        mask = (lobe_prob <= 1).to(torch.float32)
+        mask = torch.masked_fill(mask, mask.bool(), self.current_label)
+        # mask[mask] = self.current_label  # label_value
+        self.current_label += 1
+        return mask
+
+    def make_shapes(self):
+        centers, axes_list = self.sample_nonoverlapping_geometries()
+        for center, axes in zip(centers, axes_list):
+            meshgrid = self._meshgrid_origin_at_centroid(center)
+            lobe_tensor = torch.zeros(self.shape, dtype=torch.float32, device=self.device)
+            num_lobes = torch.randint(self.num_lobes_range[0], self.num_lobes_range[1] + 1, (1,)).item()
+
+            for _ in range(num_lobes):
+                #lobe_center_shift = torch.randint(-axes[0]//2, axes[0]//2, (3,), device=self.device)
+                lobe_center_shift = torch.randint(-axes[0]+1, axes[0]-1, (3,), device=self.device)
+                shifted_center = (center[0] + lobe_center_shift[0],
+                                  center[1] + lobe_center_shift[1],
+                                  center[2] + lobe_center_shift[2])
+                shifted_meshgrid = self._meshgrid_origin_at_centroid(shifted_center)
+                lobe_prob = self._make_lobe_prob(shifted_meshgrid, axes)
+                lobe = self._make_lobe_from_prob(lobe_prob)
+                lobe_tensor += lobe
+
+            # self.imprint_tensor += lobe_tensor
+            self.imprint_tensor[lobe_tensor > 0] = lobe_tensor[lobe_tensor > 0]
+            # self.imprint_tensor[self.imprint_tensor > 1] = 1  # Clip values to 1 for overlap regions
+
+        return self.imprint_tensor
